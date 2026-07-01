@@ -57,6 +57,7 @@
 #define SERVO0_PIN                          PD0
 #define SERVO1_PIN                          PC9
 #define KILL_PIN                            PF6
+#define FREEZE_PIN                          PG8
 #define LED_PIN                             PB0 
 #define NEOPIXEL_PIN                        PA1 // LED driving pin
 //
@@ -67,7 +68,7 @@
 //#define Z_DIAG_PIN                          PG8   // Z-
 #define E0_DIAG_PIN                         PE15  // E0
 #define E1_DIAG_PIN                         PE10  // E1
-#define E2_DIAG_PIN                         PG5   // E2
+//#define E2_DIAG_PIN                         PG5   // E2
 
 //
 // Limit Switches
@@ -119,13 +120,13 @@
 // Filament Runout Sensor
 //
 #ifndef FIL_RUNOUT_PIN
-  #define FIL_RUNOUT_PIN                    PE15
+  #define FIL_RUNOUT_PIN                    PG5
 #endif
 #ifndef FIL_RUNOUT2_PIN
-  #define FIL_RUNOUT2_PIN                   PE10
+//  #define FIL_RUNOUT2_PIN                   PE10
 #endif
 #ifndef FIL_RUNOUT3_PIN
-  #define FIL_RUNOUT3_PIN                   PG5
+//  #define FIL_RUNOUT3_PIN                   PG5
 #endif
 
 //

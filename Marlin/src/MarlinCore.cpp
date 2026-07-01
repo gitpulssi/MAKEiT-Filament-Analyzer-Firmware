@@ -260,8 +260,20 @@ PGMSTR(M112_KILL_STR, "M112 Shutdown");
 
 MarlinState marlin_state = MF_INITIALIZING;
 
-bool PastKillPin = false;
-bool PastFreezePin = false; // or true, depending on your default state	//MiT
+bool PastKillPin = false; //MiT
+
+#if ENABLED(FREEZE_FEATURE) //MiT
+
+  #ifndef FREEZE_DEBOUNCE_MS
+    #define FREEZE_DEBOUNCE_MS 50
+  #endif
+
+  static bool FreezePinInit = false;
+  static bool FreezeRawLast = false;
+  static bool FreezeStable = false;
+  static millis_t FreezeRawChangedMs = 0;
+
+#endif //MiT
 
 // For M109 and M190, this flag may be cleared (by M108) to exit the wait loop
 bool wait_for_heatup = true;
@@ -495,18 +507,58 @@ inline void manage_inactivity(const bool no_stepper_sleep=false) {
     }
   #endif
 
-  #if ENABLED(FREEZE_FEATURE)
-    if (READ(FREEZE_PIN) == FREEZE_STATE && READ(FREEZE_PIN) != PastFreezePin) {
-      hostui.freeze();
-      stepper.frozen = (READ(FREEZE_PIN) == FREEZE_STATE);
-    }
+  #if ENABLED(FREEZE_FEATURE) //MiT
 
-    if (READ(FREEZE_PIN) != FREEZE_STATE && READ(FREEZE_PIN) != PastFreezePin) {
-      stepper.frozen = (READ(FREEZE_PIN) == FREEZE_STATE);
+  // const millis_t ms = millis();
+
+  // Read the pin once per pass.
+  // true means the freeze input is active.
+  const bool freeze_raw = (READ(FREEZE_PIN) == FREEZE_STATE);
+
+  // Initialize debounce state on the first pass.
+  if (!FreezePinInit) {
+    FreezePinInit = true;
+    FreezeRawLast = freeze_raw;
+    FreezeStable = freeze_raw;
+    FreezeRawChangedMs = ms;
+    stepper.frozen = FreezeStable;
+  }
+
+  // Raw input changed, so restart the debounce timer.
+  if (freeze_raw != FreezeRawLast) {
+    FreezeRawLast = freeze_raw;
+    FreezeRawChangedMs = ms;
+  }
+
+  // Accept the new state only after it has stayed stable long enough.
+  if (ELAPSED(ms, FreezeRawChangedMs + FREEZE_DEBOUNCE_MS) && freeze_raw != FreezeStable) {
+    FreezeStable = freeze_raw;
+
+    if (FreezeStable) {
+      // Stop motion now and resync planner positions
+      quickstop_stepper();
+
+      // Freeze step generation
+      stepper.frozen = true;
+
+      // Hard stop the extruder driver so it cannot keep feeding
+      stepper.disable_e_steppers();
+
+      // Optional: tell host (OctoPrint may show a message)
+      hostui.freeze();
+    }
+    else {
+      // Re-enable the extruder driver for resume
+      stepper.enable_e_steppers();
+
+      // Unfreeze step generation
+      stepper.frozen = false;
+
+      // Optional: tell host
       hostui.unfreeze();
     }
-    PastFreezePin = READ(FREEZE_PIN);
-  #endif
+  }
+  #endif //MiT
 
   #if HAS_HOME
     // Handle a standalone HOME button
@@ -1240,7 +1292,6 @@ void setup() {
       SET_INPUT_PULLDOWN(FREEZE_PIN);
     #else
       SET_INPUT_PULLUP(FREEZE_PIN);
-      PastFreezePin = (!READ(FREEZE_PIN)); //MiT
     #endif
   #endif
 

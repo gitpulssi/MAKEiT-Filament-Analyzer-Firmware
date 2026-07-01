@@ -85,23 +85,21 @@
 
 // @section machine
 
-// #define MAKEIT_SKR
+#define MAKEIT_SKR
 
-// #define MAKEIT2x2
+//#define MAKEIT2x2
 // #define MAKEIT2x2S
-// #define MAKEIT2x4	
- #define MAKEIT2x4S 
+ #define MAKEIT2x4	
+// #define MAKEIT2x4S 
 
 #define NO_CONFIGURATION_EMBEDDING_WARNING
 
-// Choose the name from boards.h that matches your setup
-#ifndef MOTHERBOARD
-//   #ifdef MAKEIT_SKR
-//     #define MOTHERBOARD BOARD_BTT_SKR_PRO_V1_2
-//  #else
-      #define MOTHERBOARD BOARD_BTT_GTR_V1_0
-//  #endif
+#if defined(MAKEIT_SKR)
+  #define MOTHERBOARD BOARD_BTT_SKR_PRO_V1_2
+#else
+  #define MOTHERBOARD BOARD_BTT_GTR_V1_0
 #endif
+
 /**
  * Select the serial port on the board to use for communication with the host.
  * This allows the connection of wireless adapters (for instance) to non-default port pins.
@@ -147,16 +145,28 @@
 //#define BLUETOOTH
 
 // Name displayed in the LCD "Ready" message and Info menu 
-
-#if ENABLED(MAKEIT2x2)
-  #define CUSTOM_MACHINE_NAME "MAKEiT2x2old FW#:6.5 "
-#elif ENABLED(MAKEIT2x2S)
-  #define CUSTOM_MACHINE_NAME "MAKEiT2x2 FW#:6.5 "
-#elif ENABLED(MAKEIT2x4)
-  #define CUSTOM_MACHINE_NAME "MAKEiT2x4 FW#:6.5 "
-#elif ENABLED(MAKEIT2x4S)
-  #define CUSTOM_MACHINE_NAME "MAKEiT2x4+ FW#:6.5 "
+#if ENABLED(MAKEIT_SKR)
+  #if ENABLED(MAKEIT2x2)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x2old SKR FW#:6.6 "
+  #elif ENABLED(MAKEIT2x2S)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x2 SKR FW#:6.6 "
+  #elif ENABLED(MAKEIT2x4)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x4 SKR FW#:6.6 "
+  #elif ENABLED(MAKEIT2x4S)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x4+ SKR FW#:6.6 "
+  #endif 
+#else
+  #if ENABLED(MAKEIT2x2)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x2old GTR FW#:6.6 "
+  #elif ENABLED(MAKEIT2x2S)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x2 GTR FW#:6.6 "
+  #elif ENABLED(MAKEIT2x4)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x4 GTR FW#:6.6 "
+  #elif ENABLED(MAKEIT2x4S)
+    #define CUSTOM_MACHINE_NAME "MAKEiT2x4+ GTR FW#:6.6 "
+  #endif
 #endif 
+
 
 // Printer's unique ID, used by some programs to differentiate between machines.
 // Choose your own or use a service like https://www.uuidgenerator.net/version4
@@ -193,7 +203,11 @@
 //#define U_DRIVER_TYPE  A4988
 //#define V_DRIVER_TYPE  A4988
 //#define W_DRIVER_TYPE  A4988
-#define E0_DRIVER_TYPE TMC2209
+#if ENABLED(MAKEIT_SKR)
+  #define E0_DRIVER_TYPE TMC5160
+#else
+  #define E0_DRIVER_TYPE TMC2209
+#endif  
 //#define E1_DRIVER_TYPE A4988
 //#define E2_DRIVER_TYPE A4988
 //#define E3_DRIVER_TYPE A4988
@@ -557,7 +571,7 @@
  *
  */
 #if ANY(MAKEIT2x4S, MAKEIT2x2S) 
-  #define TEMP_SENSOR_0 201
+  #define TEMP_SENSOR_0 21
 #else
   #define TEMP_SENSOR_0 201
   //#define TEMP_SENSOR_0 201 // older MISUMI 201
@@ -677,8 +691,9 @@
 
 // Enable PIDTEMP for PID control or MPCTEMP for Predictive Model.
 // temperature control. Disable both for bang-bang heating.
- #define PIDTEMP          // See the PID Tuning Guide at https://reprap.org/wiki/PID_Tuning
-// #define MPCTEMP        // ** EXPERIMENTAL **
+
+//#define MPCTEMP        // ** EXPERIMENTAL **
+#define PIDTEMP          // See the PID Tuning Guide at https://reprap.org/wiki/PID_Tuning
 
 #define BANG_MAX 255     // Limits current to nozzle while in bang-bang mode; 255=full current
 #define PID_MAX BANG_MAX // Limits current to nozzle while PID is active (see PID_FUNCTIONAL_RANGE below); 255=full current
@@ -1302,7 +1317,7 @@
  *   https://blog.kyneticcnc.com/2018/10/computing-junction-deviation-for-marlin.html
  */
 #if DISABLED(CLASSIC_JERK)
-  #define JUNCTION_DEVIATION_MM 0.01 // (mm) Distance from real junction edge
+  #define JUNCTION_DEVIATION_MM 0.032 // (mm) Distance from real junction edge
   #define JD_HANDLE_SMALL_SEGMENTS    // Use curvature estimation instead of just the junction angle
                                       // for small segments (< 1mm) with large junction angles (> 135°).
 #endif
@@ -1676,9 +1691,9 @@
 
 // Disable axis steppers immediately when they're not being stepped.
 // WARNING: When motors turn off there is a chance of losing position accuracy!
-#define DISABLE_X false
-#define DISABLE_Y false
-#define DISABLE_Z false
+//#define DISABLE_X false
+//#define DISABLE_Y false
+//#define DISABLE_Z false
 //#define DISABLE_I false
 //#define DISABLE_J false
 //#define DISABLE_K false
@@ -1705,8 +1720,14 @@
   #define INVERT_Y_DIR true
 #endif 
 
-#define INVERT_Z_DIR false
-//#define INVERT_I_DIR false
+#if defined(MAKEIT_SKR)
+  #define INVERT_Z_DIR true
+  #define INVERT_E0_DIR true
+#else
+  #define INVERT_Z_DIR false
+  #define INVERT_E0_DIR false
+#endif
+ //#define INVERT_I_DIR false
 //#define INVERT_J_DIR false
 //#define INVERT_K_DIR false
 //#define INVERT_U_DIR false
@@ -1716,7 +1737,7 @@
 // @section extruder
 
 // For direct drive extruder v9 set to true, for geared extruder set to false.
-#define INVERT_E0_DIR false
+
 #define INVERT_E1_DIR false
 #define INVERT_E2_DIR false
 #define INVERT_E3_DIR false

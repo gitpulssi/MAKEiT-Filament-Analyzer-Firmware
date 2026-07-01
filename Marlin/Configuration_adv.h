@@ -2114,7 +2114,7 @@
  *
  * See https://marlinfw.org/docs/features/lin_advance.html for full instructions.
  */
-#define LIN_ADVANCE
+// #define LIN_ADVANCE
 #if ENABLED(LIN_ADVANCE)
   #if ENABLED(DISTINCT_E_FACTORS)
     #define ADVANCE_K { 0.22 }    // (mm) Compression length per 1mm/s extruder speed, per extruder
@@ -2393,7 +2393,7 @@
 #if BOTH(SDSUPPORT, DIRECT_STEPPING)
   #define BLOCK_BUFFER_SIZE 16
 #elif ENABLED(SDSUPPORT)
-  #define BLOCK_BUFFER_SIZE 16
+  #define BLOCK_BUFFER_SIZE 32
 #else
   #define BLOCK_BUFFER_SIZE 16
 #endif
@@ -2402,7 +2402,7 @@
 
 // The ASCII buffer for serial input
 #define MAX_CMD_SIZE 96
-#define BUFSIZE 32
+#define BUFSIZE 8
 
 // Transmission to Host Buffer Size
 // To save 386 bytes of flash (and TX_BUFFER_SIZE+3 bytes of RAM) set to 0.
@@ -2417,7 +2417,7 @@
 // Without XON/XOFF flow control (see SERIAL_XON_XOFF below) 32 bytes should be enough.
 // To use flow control, set this buffer size to at least 1024 bytes.
 // :[0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
-#define RX_BUFFER_SIZE 1024
+#define RX_BUFFER_SIZE 256
 
 #if RX_BUFFER_SIZE >= 1024
   // Enable to have the controller send XON/XOFF control characters to
@@ -2439,7 +2439,7 @@
 // Dump an error to the serial port if the serial receive buffer overflows.
 // If you see these errors, increase the RX_BUFFER_SIZE value.
 // Not supported on all platforms.
-#define RX_BUFFER_MONITOR
+// #define RX_BUFFER_MONITOR
 
 /**
  * Emergency Command Parser
@@ -2864,24 +2864,34 @@
     //#define W_INTERPOLATE  true
     //#define W_HOLD_MULTIPLIER 0.5
   #endif
-
-  #if AXIS_IS_TMC_CONFIG(E0)
-    #define E0_CURRENT      900
-    #define E0_MICROSTEPS    16
-    #define E0_RSENSE         0.11
-    #define E0_CHAIN_POS     -1
-    //#define E0_INTERPOLATE true
-    //#define E0_HOLD_MULTIPLIER 0.5
+  #if ENABLED(MAKEIT_SKR)
+    #if AXIS_IS_TMC_CONFIG(E0)
+      #define E0_CURRENT       900
+      #define E0_MICROSTEPS    16
+      #define E0_RSENSE         0.075
+      #define E0_CHAIN_POS     -1
+      //#define E0_INTERPOLATE true
+      //#define E0_HOLD_MULTIPLIER 0.5
+    #endif
+  #else
+    #if AXIS_IS_TMC_CONFIG(E0)
+      #define E0_CURRENT       900
+      #define E0_MICROSTEPS    16
+      #define E0_RSENSE         0.11
+      #define E0_CHAIN_POS     -1
+      //#define E0_INTERPOLATE true
+      //#define E0_HOLD_MULTIPLIER 0.5
+    #endif
   #endif
 
   #if AXIS_IS_TMC_CONFIG(E1)
-    #define E1_CURRENT      800
-    #define E1_MICROSTEPS   E0_MICROSTEPS
-    #define E1_RSENSE         0.11
-    #define E1_CHAIN_POS     -1
-    //#define E1_INTERPOLATE true
-    //#define E1_HOLD_MULTIPLIER 0.5
-  #endif
+   #define E1_CURRENT      900
+   #define E1_MICROSTEPS   E0_MICROSTEPS
+   #define E1_RSENSE         0.11
+   #define E1_CHAIN_POS     -1
+   //#define E1_INTERPOLATE true
+   //#define E1_HOLD_MULTIPLIER 0.5
+ #endif
 
   #if AXIS_IS_TMC_CONFIG(E2)
     #define E2_CURRENT      800
@@ -2971,7 +2981,7 @@
    * The default SW SPI pins are defined the respective pins files,
    * but you can override or define them here.
    */
-  //#define TMC_USE_SW_SPI
+  #define TMC_USE_SW_SPI
   //#define TMC_SW_MOSI       -1
   //#define TMC_SW_MISO       -1
   //#define TMC_SW_SCK        -1
@@ -3031,7 +3041,7 @@
    * When disabled, Marlin will use spreadCycle stepping mode.
    */
   #if HAS_STEALTHCHOP
-    #define STEALTHCHOP_XY
+    //#define STEALTHCHOP_XY
     #define STEALTHCHOP_Z
     #define STEALTHCHOP_I
     #define STEALTHCHOP_J
@@ -4007,7 +4017,7 @@
  */
 #define FREEZE_FEATURE
 #if ENABLED(FREEZE_FEATURE)
-  #define FREEZE_PIN PE0   // Override the default (KILL) pin here
+  //#define FREEZE_PIN PG8   // Override the default (KILL) pin here
   #define FREEZE_STATE LOW  // State of pin indicating freeze
 #endif
 

@@ -47,6 +47,7 @@
 #define FIL_RUNOUT_PIN                      PI11
 #define LED_PIN                             PB0 
 #define KILL_PIN                            PC3
+#define FREEZE_PIN                          PE0
 #define NEOPIXEL_PIN                        PF13 // LED driving pin
 
 #if ENABLED(TOOL_SENSOR)
