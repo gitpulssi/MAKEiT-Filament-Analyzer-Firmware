@@ -5,14 +5,17 @@ Phase 0 proves the encoder and telemetry path before any automatic flow-test log
 ## Hardware locked for Phase 0
 
 ```text
+Controller:
+  BTT SKR Pro V1.2
+
 Encoder input:
-  FIL_RUNOUT_PIN / PI11
+  FIL_RUNOUT_PIN / PG5
 
 Telemetry:
-  GTR TFT TX3 -> Raspberry Pi RX2
-  GTR GND     -> Raspberry Pi GND
-  GTR TFT RX3 disconnected for Phase 0
-  Pi TX2      disconnected for Phase 0
+  SKR Pro TFT TX3 -> Raspberry Pi RX2
+  SKR Pro GND     -> Raspberry Pi GND
+  SKR Pro TFT RX3 disconnected for Phase 0
+  Pi TX2          disconnected for Phase 0
 ```
 
 The telemetry link is one-way. OctoPrint remains the only commander on the normal printer serial connection.
