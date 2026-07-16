@@ -40,6 +40,7 @@ public:
 
   static uint32_t encoder_events();
   static uint32_t last_edge_us();
+  static uint8_t encoder_pin_state();
 
   static void report_to_host();
 
@@ -55,7 +56,7 @@ private:
 
   static void encoder_isr();
   static void telemetry_line();
-  static void telemetry_print_line(const uint32_t seq, const uint32_t ms, const uint32_t enc, const uint32_t edge_us);
+  static void telemetry_print_line(const uint32_t seq, const uint32_t ms, const uint32_t enc, const uint32_t edge_us, const uint8_t pin_state);
 };
 
 extern MakeItFilamentAnalyzerPhase0 makeit_fa_phase0;
