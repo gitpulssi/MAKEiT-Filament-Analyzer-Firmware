@@ -67,7 +67,8 @@ def patch_configuration_adv_h() -> None:
 #define MAKEIT_FILAMENT_ANALYZER_PHASE0
 
 // Encoder signal connected to the existing filament runout input.
-#define MAKEIT_FA_ENCODER_PIN            FIL_RUNOUT_PIN  // PI11 on MAKEiT GTR pin config
+// On BTT SKR Pro V1.2, FIL_RUNOUT_PIN is PG5 in the MAKEiT pin config.
+#define MAKEIT_FA_ENCODER_PIN            FIL_RUNOUT_PIN
 #define MAKEIT_FA_ENCODER_PULLUP
 
 // Record this exact trigger mode with calibration data.
@@ -75,8 +76,8 @@ def patch_configuration_adv_h() -> None:
 #define MAKEIT_FA_ENCODER_TRIGGER_NAME   "RISING"
 
 // Dedicated one-way telemetry on the free TFT UART3 path.
-// Wire GTR TFT TX3 -> Raspberry Pi RX2, GTR GND -> Pi GND.
-// Leave GTR TFT RX3 / Pi TX2 disconnected for Phase 0.
+// Wire SKR Pro TFT TX3 -> Raspberry Pi RX2, board GND -> Pi GND.
+// Leave SKR Pro TFT RX3 / Pi TX2 disconnected for Phase 0.
 #define MAKEIT_FA_TELEM_SERIAL           Serial3
 #define MAKEIT_FA_TELEM_BAUD             250000
 #define MAKEIT_FA_TELEM_INTERVAL_MS      200
