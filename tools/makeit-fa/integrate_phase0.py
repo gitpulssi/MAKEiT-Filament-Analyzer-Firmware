@@ -42,17 +42,18 @@ def patch_configuration_h() -> None:
     path = "Marlin/Configuration.h"
     text = read(path)
 
-    # Analyzer telemetry owns Serial3 directly. Disable Marlin host SERIAL_PORT_3 if present.
-    if "#define SERIAL_PORT_3 3" in text:
-        text = text.replace(
-            "#define SERIAL_PORT_3 3",
-            "//#define SERIAL_PORT_3 3  // Disabled: MAKEiT filament analyzer owns Serial3 telemetry"
-        )
-        write(path, text)
+    # Analyzer telemetry owns Serial3 directly. Disable only an active Marlin host SERIAL_PORT_3 assignment.
+    # Match at the beginning of a line so an already-commented //#define line is not rewritten repeatedly.
+    pattern = re.compile(r'^(\s*)#define\s+SERIAL_PORT_3\s+3\b.*$', re.MULTILINE)
+    replacement = r'\1//#define SERIAL_PORT_3 3  // Disabled: MAKEiT filament analyzer owns Serial3 telemetry'
+    new_text, count = pattern.subn(replacement, text, count=1)
+
+    if count:
+        write(path, new_text)
     elif "MAKEiT filament analyzer owns Serial3 telemetry" in text:
         print(f"ok {path}: SERIAL_PORT_3 already disabled for analyzer")
     else:
-        print(f"note {path}: no '#define SERIAL_PORT_3 3' line found")
+        print(f"note {path}: no active '#define SERIAL_PORT_3 3' line found")
 
 
 def patch_configuration_adv_h() -> None:
@@ -102,7 +103,6 @@ def patch_marlin_core() -> None:
         ),
     )
 
-    # Init hook: after setup() starts, before normal work is fine because pins/serial are already available enough for this Phase-0 counter.
     ensure_contains(
         path,
         'makeit_fa_phase0.init();',
@@ -114,7 +114,6 @@ def patch_marlin_core() -> None:
         ),
     )
 
-    # Idle hook: MarlinCore.cpp has idle(); add the analyzer idle call near the top of it.
     ensure_contains(
         path,
         'makeit_fa_phase0.idle();',
