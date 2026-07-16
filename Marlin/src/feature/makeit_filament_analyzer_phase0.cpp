@@ -69,6 +69,10 @@ uint32_t MakeItFilamentAnalyzerPhase0::last_edge_us() {
   return v;
 }
 
+uint8_t MakeItFilamentAnalyzerPhase0::encoder_pin_state() {
+  return READ(MAKEIT_FA_ENCODER_PIN) ? 1 : 0;
+}
+
 void MakeItFilamentAnalyzerPhase0::reset_encoder() {
   CRITICAL_SECTION_START();
   encoder_events_ = 0;
@@ -123,16 +127,18 @@ void MakeItFilamentAnalyzerPhase0::idle() {
 void MakeItFilamentAnalyzerPhase0::telemetry_line() {
   const uint32_t enc = encoder_events();
   const uint32_t edge_us = last_edge_us();
-  telemetry_print_line(++seq_, millis(), enc, edge_us);
+  const uint8_t pin_state = encoder_pin_state();
+  telemetry_print_line(++seq_, millis(), enc, edge_us, pin_state);
 }
 
-void MakeItFilamentAnalyzerPhase0::telemetry_print_line(const uint32_t seq, const uint32_t ms, const uint32_t enc, const uint32_t edge_us) {
+void MakeItFilamentAnalyzerPhase0::telemetry_print_line(const uint32_t seq, const uint32_t ms, const uint32_t enc, const uint32_t edge_us, const uint8_t pin_state) {
   #if MAKEIT_FA_TELEM_AVAILABLE
     MAKEIT_FA_TELEM_SERIAL.print(F("FA0,"));
     MAKEIT_FA_TELEM_SERIAL.print(F("seq=")); MAKEIT_FA_TELEM_SERIAL.print(seq);
     MAKEIT_FA_TELEM_SERIAL.print(F(",ms=")); MAKEIT_FA_TELEM_SERIAL.print(ms);
     MAKEIT_FA_TELEM_SERIAL.print(F(",enc=")); MAKEIT_FA_TELEM_SERIAL.print(enc);
     MAKEIT_FA_TELEM_SERIAL.print(F(",last_edge_us=")); MAKEIT_FA_TELEM_SERIAL.print(edge_us);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",pin=")); MAKEIT_FA_TELEM_SERIAL.print(pin_state);
     MAKEIT_FA_TELEM_SERIAL.print(F(",mode=")); MAKEIT_FA_TELEM_SERIAL.print(F(MAKEIT_FA_ENCODER_TRIGGER_NAME));
     MAKEIT_FA_TELEM_SERIAL.println();
   #endif
@@ -141,10 +147,12 @@ void MakeItFilamentAnalyzerPhase0::telemetry_print_line(const uint32_t seq, cons
 void MakeItFilamentAnalyzerPhase0::report_to_host() {
   const uint32_t enc = encoder_events();
   const uint32_t edge_us = last_edge_us();
+  const uint8_t pin_state = encoder_pin_state();
 
   SERIAL_ECHOPGM("FA0: ");
   SERIAL_ECHOPGM("enc="); SERIAL_ECHO(enc);
   SERIAL_ECHOPGM(" last_edge_us="); SERIAL_ECHO(edge_us);
+  SERIAL_ECHOPGM(" pin="); SERIAL_ECHO(pin_state);
   SERIAL_ECHOPGM(" stream="); SERIAL_ECHO(stream_enabled_ ? 1 : 0);
   SERIAL_ECHOPGM(" interval_ms="); SERIAL_ECHO(stream_interval_ms_);
   SERIAL_ECHOPGM(" mode="); SERIAL_ECHOPGM(MAKEIT_FA_ENCODER_TRIGGER_NAME);
