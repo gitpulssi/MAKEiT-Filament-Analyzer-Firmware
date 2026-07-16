@@ -16,6 +16,10 @@
   #define MAKEIT_FA_ENCODER_INTERRUPT_MODE RISING
 #endif
 
+#ifndef MAKEIT_FA_ENCODER_USE_POLLING
+  #define MAKEIT_FA_ENCODER_USE_POLLING 1
+#endif
+
 #ifndef MAKEIT_FA_TELEM_BAUD
   #define MAKEIT_FA_TELEM_BAUD 250000
 #endif
@@ -36,14 +40,15 @@ volatile uint32_t MakeItFilamentAnalyzerPhase0::last_edge_us_ = 0;
 
 bool MakeItFilamentAnalyzerPhase0::initialized_ = false;
 bool MakeItFilamentAnalyzerPhase0::stream_enabled_ = false;
+bool MakeItFilamentAnalyzerPhase0::poll_initialized_ = false;
+bool MakeItFilamentAnalyzerPhase0::last_pin_state_ = false;
 uint32_t MakeItFilamentAnalyzerPhase0::stream_interval_ms_ = MAKEIT_FA_TELEM_INTERVAL_MS;
 uint32_t MakeItFilamentAnalyzerPhase0::next_stream_ms_ = 0;
 uint32_t MakeItFilamentAnalyzerPhase0::seq_ = 0;
 
 MakeItFilamentAnalyzerPhase0 makeit_fa_phase0;
 
-void MakeItFilamentAnalyzerPhase0::encoder_isr() {
-  // ISR rule: count/timestamp only. No serial, no TMC UART, no allocation.
+void MakeItFilamentAnalyzerPhase0::count_encoder_event() {
   ++encoder_events_;
   last_edge_us_ = micros();
 
@@ -51,6 +56,11 @@ void MakeItFilamentAnalyzerPhase0::encoder_isr() {
     WRITE(MAKEIT_FA_MARKER_ENCODER_PIN, HIGH);
     WRITE(MAKEIT_FA_MARKER_ENCODER_PIN, LOW);
   #endif
+}
+
+void MakeItFilamentAnalyzerPhase0::encoder_isr() {
+  // ISR rule: count/timestamp only. No serial, no TMC UART, no allocation.
+  count_encoder_event();
 }
 
 uint32_t MakeItFilamentAnalyzerPhase0::encoder_events() {
@@ -73,11 +83,49 @@ uint8_t MakeItFilamentAnalyzerPhase0::encoder_pin_state() {
   return READ(MAKEIT_FA_ENCODER_PIN) ? 1 : 0;
 }
 
+void MakeItFilamentAnalyzerPhase0::poll_encoder() {
+  const bool current = !!encoder_pin_state();
+
+  if (!poll_initialized_) {
+    last_pin_state_ = current;
+    poll_initialized_ = true;
+    return;
+  }
+
+  if (current == last_pin_state_) return;
+
+  bool should_count = false;
+
+  #if MAKEIT_FA_ENCODER_INTERRUPT_MODE == CHANGE
+    should_count = true;
+  #elif MAKEIT_FA_ENCODER_INTERRUPT_MODE == RISING
+    should_count = (!last_pin_state_ && current);
+  #elif MAKEIT_FA_ENCODER_INTERRUPT_MODE == FALLING
+    should_count = (last_pin_state_ && !current);
+  #else
+    // Unknown mode: count every transition for diagnostics.
+    should_count = true;
+  #endif
+
+  last_pin_state_ = current;
+
+  if (should_count) {
+    CRITICAL_SECTION_START();
+    count_encoder_event();
+    CRITICAL_SECTION_END();
+  }
+}
+
 void MakeItFilamentAnalyzerPhase0::reset_encoder() {
   CRITICAL_SECTION_START();
   encoder_events_ = 0;
   last_edge_us_ = micros();
   CRITICAL_SECTION_END();
+
+  // Reset the software edge detector to the current physical pin state so
+  // the next count represents a real new edge, not the state at reset time.
+  last_pin_state_ = !!encoder_pin_state();
+  poll_initialized_ = true;
   seq_ = 0;
 }
 
@@ -104,7 +152,10 @@ void MakeItFilamentAnalyzerPhase0::init() {
   #endif
 
   reset_encoder();
-  attachInterrupt(digitalPinToInterrupt(MAKEIT_FA_ENCODER_PIN), encoder_isr, MAKEIT_FA_ENCODER_INTERRUPT_MODE);
+
+  #if !MAKEIT_FA_ENCODER_USE_POLLING
+    attachInterrupt(MAKEIT_FA_ENCODER_PIN, encoder_isr, MAKEIT_FA_ENCODER_INTERRUPT_MODE);
+  #endif
 
   #if MAKEIT_FA_TELEM_AVAILABLE
     MAKEIT_FA_TELEM_SERIAL.begin(MAKEIT_FA_TELEM_BAUD);
@@ -115,7 +166,13 @@ void MakeItFilamentAnalyzerPhase0::init() {
 }
 
 void MakeItFilamentAnalyzerPhase0::idle() {
-  if (!initialized_ || !stream_enabled_) return;
+  if (!initialized_) return;
+
+  #if MAKEIT_FA_ENCODER_USE_POLLING
+    poll_encoder();
+  #endif
+
+  if (!stream_enabled_) return;
 
   const uint32_t now = millis();
   if ((int32_t)(now - next_stream_ms_) >= 0) {
@@ -125,6 +182,10 @@ void MakeItFilamentAnalyzerPhase0::idle() {
 }
 
 void MakeItFilamentAnalyzerPhase0::telemetry_line() {
+  #if MAKEIT_FA_ENCODER_USE_POLLING
+    poll_encoder();
+  #endif
+
   const uint32_t enc = encoder_events();
   const uint32_t edge_us = last_edge_us();
   const uint8_t pin_state = encoder_pin_state();
@@ -145,6 +206,10 @@ void MakeItFilamentAnalyzerPhase0::telemetry_print_line(const uint32_t seq, cons
 }
 
 void MakeItFilamentAnalyzerPhase0::report_to_host() {
+  #if MAKEIT_FA_ENCODER_USE_POLLING
+    poll_encoder();
+  #endif
+
   const uint32_t enc = encoder_events();
   const uint32_t edge_us = last_edge_us();
   const uint8_t pin_state = encoder_pin_state();
@@ -156,6 +221,7 @@ void MakeItFilamentAnalyzerPhase0::report_to_host() {
   SERIAL_ECHOPGM(" stream="); SERIAL_ECHO(stream_enabled_ ? 1 : 0);
   SERIAL_ECHOPGM(" interval_ms="); SERIAL_ECHO(stream_interval_ms_);
   SERIAL_ECHOPGM(" mode="); SERIAL_ECHOPGM(MAKEIT_FA_ENCODER_TRIGGER_NAME);
+  SERIAL_ECHOPGM(" poll="); SERIAL_ECHO(MAKEIT_FA_ENCODER_USE_POLLING ? 1 : 0);
   SERIAL_ECHOLNPGM("");
 }
 
