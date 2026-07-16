@@ -42,6 +42,7 @@ public:
   static uint32_t last_edge_us();
   static uint8_t encoder_pin_state();
 
+  static void poll_encoder();
   static void report_to_host();
 
 private:
@@ -50,11 +51,14 @@ private:
 
   static bool initialized_;
   static bool stream_enabled_;
+  static bool poll_initialized_;
+  static bool last_pin_state_;
   static uint32_t stream_interval_ms_;
   static uint32_t next_stream_ms_;
   static uint32_t seq_;
 
   static void encoder_isr();
+  static void count_encoder_event();
   static void telemetry_line();
   static void telemetry_print_line(const uint32_t seq, const uint32_t ms, const uint32_t enc, const uint32_t edge_us, const uint8_t pin_state);
 };
