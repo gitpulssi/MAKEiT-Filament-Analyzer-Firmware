@@ -42,16 +42,19 @@ def patch_configuration_h() -> None:
     path = "Marlin/Configuration.h"
     text = read(path)
 
-    # Analyzer telemetry owns Serial3 directly. Disable only an active Marlin host SERIAL_PORT_3 assignment.
-    # Match at the beginning of a line so an already-commented //#define line is not rewritten repeatedly.
-    pattern = re.compile(r'^(\s*)#define\s+SERIAL_PORT_3\s+3\b.*$', re.MULTILINE)
-    replacement = r'\1//#define SERIAL_PORT_3 3  // Disabled: MAKEiT filament analyzer owns Serial3 telemetry'
-    new_text, count = pattern.subn(replacement, text, count=1)
-
-    if count:
-        write(path, new_text)
-    elif "MAKEiT filament analyzer owns Serial3 telemetry" in text:
+    # Analyzer telemetry owns Serial3 directly. Disable Marlin host SERIAL_PORT_3 if present.
+    disabled_line = "//#define SERIAL_PORT_3 3  // Disabled: MAKEiT filament analyzer owns Serial3 telemetry"
+    if disabled_line in text:
         print(f"ok {path}: SERIAL_PORT_3 already disabled for analyzer")
+    elif re.search(r'^\s*#define\s+SERIAL_PORT_3\s+3\b', text, re.MULTILINE):
+        text = re.sub(
+            r'^\s*#define\s+SERIAL_PORT_3\s+3\b.*$',
+            disabled_line,
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        write(path, text)
     else:
         print(f"note {path}: no active '#define SERIAL_PORT_3 3' line found")
 
@@ -67,9 +70,10 @@ def patch_configuration_adv_h() -> None:
 // First bench-test block: encoder calibration and raw one-way telemetry only.
 #define MAKEIT_FILAMENT_ANALYZER_PHASE0
 
-// Encoder signal connected to the existing filament runout input.
-// On BTT SKR Pro V1.2, FIL_RUNOUT_PIN is PG5 in the MAKEiT pin config.
-#define MAKEIT_FA_ENCODER_PIN            FIL_RUNOUT_PIN
+// Encoder signal connected to SKR Pro filament runout / E2 DIAG area.
+// Use the physical pin directly because Marlin may not define FIL_RUNOUT_PIN
+// when the normal FILAMENT_RUNOUT_SENSOR feature is disabled.
+#define MAKEIT_FA_ENCODER_PIN            PG5
 #define MAKEIT_FA_ENCODER_PULLUP
 
 // Record this exact trigger mode with calibration data.
