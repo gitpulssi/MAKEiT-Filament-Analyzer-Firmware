@@ -35,10 +35,10 @@ L  total forward filament length in mm. Default 10.0.
 F  filament feed rate in mm/min. Default 100.0.
 S  segment length in mm. Default 0.35. Clamped to 0.05..0.35.
 B  maximum in-flight planner blocks. Default 2. Clamped to 1..2.
-I  FA1 telemetry interval in ms while the blocking test runs. Default 250.
+I  FA1 telemetry interval in ms while the non-blocking test runs. Default 250.
 ```
 
-`M874` is open-loop. It does not stop based on encoder efficiency. It only commands firmware-generated E-only segments while keeping the planner occupancy capped.
+`M874` is open-loop. It does not stop based on encoder efficiency. It starts a non-blocking firmware-generated E-only segmented feed test. Segments are enqueued from Marlin `idle()` so the watchdog and normal background tasks remain serviced.
 
 Encoder diagnostics:
 
@@ -55,7 +55,7 @@ M875 I200  set telemetry interval to 200 ms
 Example `M875` host response:
 
 ```text
-FA0: enc=0 last_edge_us=123456 pin=0 stream=0 interval_ms=200 mode=RISING poll=1
+FA0: enc=0 last_edge_us=123456 pin=0 stream=0 interval_ms=200 mode=RISING poll=1 seg=0
 ```
 
 Example `FA0` telemetry record:
@@ -140,6 +140,17 @@ Start conservative:
 ```gcode
 M875 R
 M874 L20 F100 S0.35 B2 I250
+```
+
+`M874` returns immediately with a `FA1: started ...` line. Wait for the later asynchronous completion line:
+
+```text
+FA1: done total_mm=20 segment_mm=0.35 feed_mm_min=100 max_blocks=2 enqueued=58 enc=...
+```
+
+Then query the encoder count:
+
+```gcode
 M875
 ```
 
@@ -148,13 +159,12 @@ Then try a faster open-loop run:
 ```gcode
 M875 R
 M874 L20 F500 S0.35 B2 I250
-M875
 ```
 
-Expected host completion line:
+Again, wait for `FA1: done ...`, then query:
 
-```text
-FA1: done total_mm=20 segment_mm=0.35 feed_mm_min=100 max_blocks=2 enqueued=58 enc=...
+```gcode
+M875
 ```
 
 For the real timing test, capture E STEP with a logic analyzer and compare continuous G1 feed against `M874` segmented feed.
