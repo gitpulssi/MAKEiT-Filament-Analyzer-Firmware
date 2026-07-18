@@ -4,7 +4,7 @@
  * Purpose:
  *   - Count filament encoder events.
  *   - Provide reset/report/stream control via M875.
- *   - Run an open-loop segmented E-only feed diagnostic via M876.
+ *   - Run an open-loop segmented E-only feed diagnostic via M874.
  *   - Optionally stream raw telemetry on a dedicated one-way UART.
  *
  * This file intentionally does NOT implement:
