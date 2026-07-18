@@ -12,6 +12,7 @@
 
 #include "makeit_filament_analyzer_phase0.h"
 #include "../core/serial.h"
+#include "../module/planner.h"
 
 bool MakeItFilamentAnalyzerPhase0::tp_host_abort_requested_ = false;
 
