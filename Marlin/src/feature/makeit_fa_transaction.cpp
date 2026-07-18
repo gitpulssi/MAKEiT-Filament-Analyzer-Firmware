@@ -1,5 +1,5 @@
 /**
- * MAKEiT Filament Analyzer - Phase 5 transaction wrapper
+ * MAKEiT Filament Analyzer - Phase 5/6 transaction wrapper
  */
 #include "../inc/MarlinConfig.h"
 
@@ -12,10 +12,12 @@
 
 MakeItFATransaction::State MakeItFATransaction::state_ = MakeItFATransaction::TX_EMPTY;
 bool MakeItFATransaction::record_valid_ = false;
+bool MakeItFATransaction::abort_requested_ = false;
 uint32_t MakeItFATransaction::point_id_ = 0;
 uint32_t MakeItFATransaction::params_hash_ = 0;
 uint32_t MakeItFATransaction::started_ms_ = 0;
 uint32_t MakeItFATransaction::finished_ms_ = 0;
+uint32_t MakeItFATransaction::abort_requested_ms_ = 0;
 
 MakeItFATransaction makeit_fa_transaction;
 
@@ -72,6 +74,8 @@ void MakeItFATransaction::report_transaction(const char *tag) {
   SERIAL_ECHOPGM(" state="); SERIAL_ECHO(state_name(state_));
   SERIAL_ECHOPGM(" started_ms="); SERIAL_ECHO(started_ms_);
   SERIAL_ECHOPGM(" finished_ms="); SERIAL_ECHO(finished_ms_);
+  SERIAL_ECHOPGM(" abort_requested="); SERIAL_ECHO(abort_requested_ ? 1 : 0);
+  SERIAL_ECHOPGM(" abort_requested_ms="); SERIAL_ECHO(abort_requested_ms_);
   SERIAL_ECHOLNPGM("");
 }
 
@@ -117,10 +121,12 @@ bool MakeItFATransaction::execute(const uint32_t point_id, const MakeItFAPointPa
   }
 
   record_valid_ = true;
+  abort_requested_ = false;
   point_id_ = point_id;
   params_hash_ = hash;
   started_ms_ = millis();
   finished_ms_ = 0;
+  abort_requested_ms_ = 0;
   state_ = TX_RUNNING;
 
   makeit_fa_phase0.configure_pulse_gap_monitor(
@@ -153,6 +159,45 @@ bool MakeItFATransaction::execute(const uint32_t point_id, const MakeItFAPointPa
   }
 
   report_transaction("started");
+  return true;
+}
+
+bool MakeItFATransaction::request_abort(const uint32_t requested_point_id) {
+  idle();
+
+  if (!record_valid_) {
+    SERIAL_ECHOLNPGM("FATX: error=NO_ACTIVE_TRANSACTION");
+    return false;
+  }
+
+  if (requested_point_id != point_id_) {
+    SERIAL_ECHOPGM("FATX: error=NOT_FOUND requested_point_id="); SERIAL_ECHO(requested_point_id);
+    SERIAL_ECHOPGM(" retained_point_id="); SERIAL_ECHO(point_id_);
+    SERIAL_ECHOLNPGM("");
+    return false;
+  }
+
+  if (abort_requested_) {
+    report_transaction("abort_replay");
+    return true;
+  }
+
+  if (state_ != TX_RUNNING) {
+    SERIAL_ECHOPGM("FATX: error=NOT_RUNNING point_id="); SERIAL_ECHO(point_id_);
+    SERIAL_ECHOPGM(" state="); SERIAL_ECHO(state_name(state_));
+    SERIAL_ECHOLNPGM("");
+    return false;
+  }
+
+  if (!makeit_fa_phase0.request_host_abort()) {
+    SERIAL_ECHOPGM("FATX: error=ABORT_REJECTED point_id="); SERIAL_ECHO(point_id_);
+    SERIAL_ECHOLNPGM("");
+    return false;
+  }
+
+  abort_requested_ = true;
+  abort_requested_ms_ = millis();
+  report_transaction("abort_requested");
   return true;
 }
 
