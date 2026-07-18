@@ -1,5 +1,5 @@
 /**
- * MAKEiT Filament Analyzer - Phase 0 / 1 / 2 / 3 bring-up
+ * MAKEiT Filament Analyzer - Phase 0 / 1 / 2 / 3 / 4 bring-up
  *
  * Purpose:
  *   - Count filament encoder events.
@@ -8,6 +8,7 @@
  *   - Run one evaluated extrusion point via M873.
  *   - Optionally monitor rolling feed efficiency and gracefully stop adding
  *     segments after confirmed mid-point feed loss.
+ *   - Optionally monitor encoder pulse gaps for faster feed-loss response.
  *   - Optionally stream raw telemetry on a dedicated one-way UART.
  *
  * This file intentionally does NOT implement:
@@ -97,6 +98,22 @@ public:
     uint8_t monitor_confirm_windows
   );
 
+  /**
+   * Configure Phase-4 pulse-gap monitoring for the next/current M873 point.
+   *
+   * gap_factor scales the expected encoder-event interval.
+   * min_gap_ms is an absolute lower bound on the timeout.
+   * min_missing_events requires enough commanded travel without a new edge
+   * before the graceful stop is requested.
+   */
+  static void configure_pulse_gap_monitor(
+    bool enabled,
+    float gap_factor,
+    uint16_t min_gap_ms,
+    float min_missing_events
+  );
+
+  static void report_pulse_gap_monitor();
   static void report_test_point();
   static bool test_point_active() { return tp_active_; }
   static bool segmented_feed_active() { return seg_active_; }
@@ -164,6 +181,7 @@ private:
 
   static void encoder_isr();
   static void count_encoder_event();
+  static void service_pulse_gap_monitor();
   static void service_segmented_feed();
   static void request_segmented_stop();
   static float estimated_completed_mm();
