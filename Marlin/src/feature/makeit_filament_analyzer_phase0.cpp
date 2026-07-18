@@ -374,6 +374,10 @@ bool MakeItFilamentAnalyzerPhase0::start_evaluated_test_point(
   }
 
   total_mm = constrain(total_mm, 20.0f, 500.0f);
+  feed_mm_min = constrain(feed_mm_min, 1.0f, 2000.0f);
+  segment_mm = constrain(segment_mm, 0.05f, 0.35f);
+  max_inflight = constrain(max_inflight, uint8_t(1), uint8_t(2));
+  report_ms = constrain(report_ms, uint16_t(50), uint16_t(5000));
   encoder_events_per_mm = constrain(encoder_events_per_mm, 0.01f, 100.0f);
   pass_efficiency_pct = constrain(pass_efficiency_pct, 50.0f, 105.0f);
   temp_tolerance = constrain(temp_tolerance, 0.5f, 15.0f);
@@ -542,7 +546,7 @@ void MakeItFilamentAnalyzerPhase0::report_test_point() {
   const float temp_avg = tp_temp_samples_ ? tp_temp_sum_ / float(tp_temp_samples_) : 0.0f;
   const float heater_avg = tp_heater_samples_ ? float(tp_heater_sum_) / float(tp_heater_samples_) : 0.0f;
 
-  SERIAL_ECHOPGM("FA2: result="); SERIAL_ECHOPGM(test_point_result_name(tp_result_));
+  SERIAL_ECHOPGM("FA2: result=", test_point_result_name(tp_result_));
   SERIAL_ECHOPGM(" gen="); SERIAL_ECHO(tp_generation_);
   SERIAL_ECHOPGM(" duration_ms="); SERIAL_ECHO(tp_finished_ms_ - tp_started_ms_);
   SERIAL_ECHOPGM(" total_mm="); SERIAL_ECHO(tp_total_mm_);
