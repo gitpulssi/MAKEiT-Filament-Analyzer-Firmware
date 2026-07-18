@@ -10,7 +10,7 @@
  *   M873 L150 F500 S0.35 B2 I250 C0.685 P95 D2 A1 W20 R85 K2
  *
  * Phase-4 rolling monitor plus pulse-gap fast path:
- *   M873 L150 F500 S0.35 B2 I250 C0.685 P95 D2 A1 W20 R85 K2 G4 H500 N2
+ *   M873 L150 F500 S0.35 B2 I250 C0.685 P95 D2 A1 W20 R85 K2 G4 H500 X2
  *
  * Query current / latest result:
  *   M873 Q
@@ -30,7 +30,7 @@
  *   K  consecutive failing windows required before graceful stop. Default 2.
  *   G  pulse-gap factor. 0 disables; 4 means four expected edge intervals.
  *   H  pulse-gap minimum timeout in ms. Default 500.
- *   N  minimum expected missing encoder events before pulse-gap stop. Default 2.
+ *   X  minimum expected missing encoder events before pulse-gap stop. Default 2.
  *   Q  report current state or latest terminal result without starting a point.
  */
 #include "../../inc/MarlinConfig.h"
@@ -61,7 +61,7 @@ void GcodeSuite::M873() {
   const uint8_t confirm      = parser.seenval('K') ? (uint8_t)parser.value_int() : 2;
   const float gap_factor     = parser.seenval('G') ? parser.value_float() : 0.0f;
   const uint16_t min_gap_ms  = parser.seenval('H') ? (uint16_t)parser.value_int() : 500;
-  const float missing_events = parser.seenval('N') ? parser.value_float() : 2.0f;
+  const float missing_events = parser.seenval('X') ? parser.value_float() : 2.0f;
 
   makeit_fa_phase0.configure_pulse_gap_monitor(
     gap_factor > 0.0f,
