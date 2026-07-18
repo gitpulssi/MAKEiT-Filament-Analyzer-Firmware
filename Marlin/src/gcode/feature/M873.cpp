@@ -1,10 +1,13 @@
 /**
- * M873 - MAKEiT Filament Analyzer Phase-2 evaluated extrusion point
+ * M873 - MAKEiT Filament Analyzer evaluated extrusion point
  *
  * The hotend must already be at a stable extrusion temperature. Use M109 first.
  *
- * Start one point:
+ * Basic evaluated point:
  *   M873 L100 F500 S0.35 B2 I250 C0.685 P95 D2
+ *
+ * Phase-3 rolling monitor with graceful auto-stop:
+ *   M873 L150 F500 S0.35 B2 I250 C0.685 P95 D2 A1 W20 R85 K2
  *
  * Query current / latest result:
  *   M873 Q
@@ -16,8 +19,12 @@
  *   B  maximum in-flight planner blocks. Default 2. Clamped to 1..2.
  *   I  FA1 telemetry interval in ms. Default 250.
  *   C  calibrated encoder events per physical filament mm. Default 0.685.
- *   P  minimum passing feed efficiency percent. Default 95.
+ *   P  minimum terminal passing feed efficiency percent. Default 95.
  *   D  maximum temperature deviation from current target in C. Default 2.
+ *   A  enable rolling feed-loss auto-stop. Default 0.
+ *   W  rolling monitor window length in commanded mm. Default 20.
+ *   R  minimum rolling window efficiency percent. Default 85.
+ *   K  consecutive failing windows required before graceful stop. Default 2.
  *   Q  report current state or latest terminal result without starting a point.
  */
 #include "../../inc/MarlinConfig.h"
@@ -41,6 +48,10 @@ void GcodeSuite::M873() {
   const float events_per_mm  = parser.seenval('C') ? parser.value_float() : 0.685f;
   const float pass_pct       = parser.seenval('P') ? parser.value_float() : 95.0f;
   const float temp_tolerance = parser.seenval('D') ? parser.value_float() : 2.0f;
+  const bool auto_stop       = parser.seenval('A') ? parser.value_bool() : false;
+  const float window_mm      = parser.seenval('W') ? parser.value_float() : 20.0f;
+  const float monitor_pct    = parser.seenval('R') ? parser.value_float() : 85.0f;
+  const uint8_t confirm      = parser.seenval('K') ? (uint8_t)parser.value_int() : 2;
 
   makeit_fa_phase0.start_evaluated_test_point(
     total_mm,
@@ -50,7 +61,11 @@ void GcodeSuite::M873() {
     report_ms,
     events_per_mm,
     pass_pct,
-    temp_tolerance
+    temp_tolerance,
+    auto_stop,
+    window_mm,
+    monitor_pct,
+    confirm
   );
 }
 
