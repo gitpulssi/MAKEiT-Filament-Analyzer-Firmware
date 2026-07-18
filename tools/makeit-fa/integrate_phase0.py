@@ -42,7 +42,6 @@ def patch_configuration_h() -> None:
     path = "Marlin/Configuration.h"
     text = read(path)
 
-    # Analyzer telemetry owns Serial3 directly. Disable Marlin host SERIAL_PORT_3 if present.
     disabled_line = "//#define SERIAL_PORT_3 3  // Disabled: MAKEiT filament analyzer owns Serial3 telemetry"
     if disabled_line in text:
         print(f"ok {path}: SERIAL_PORT_3 already disabled for analyzer")
@@ -67,32 +66,43 @@ def patch_configuration_adv_h() -> None:
 // --------------------------------------------------------------------------
 // MAKEiT Filament Analyzer Phase 0
 // --------------------------------------------------------------------------
-// Encoder calibration, segmented motion, evaluated points, and transactions.
+// Encoder calibration, segmented motion, evaluated points, transactions, and
+// M879 emergency-parser graceful abort.
 #define MAKEIT_FILAMENT_ANALYZER_PHASE0
 
 // Encoder signal connected to SKR Pro filament runout / E2 DIAG area.
-// Use the physical pin directly because Marlin may not define FIL_RUNOUT_PIN
-// when the normal FILAMENT_RUNOUT_SENSOR feature is disabled.
 #define MAKEIT_FA_ENCODER_PIN            PG5
 #define MAKEIT_FA_ENCODER_PULLUP
 
-// Record this exact trigger mode with calibration data.
 #define MAKEIT_FA_ENCODER_INTERRUPT_MODE RISING
 #define MAKEIT_FA_ENCODER_TRIGGER_NAME   "RISING"
 #define MAKEIT_FA_ENCODER_USE_POLLING    1
 
 // Dedicated one-way telemetry on the free TFT UART3 path.
-// Wire SKR Pro TFT TX3 -> Raspberry Pi RX2, board GND -> Pi GND.
-// Leave SKR Pro TFT RX3 / Pi TX2 disconnected during bring-up.
 #define MAKEIT_FA_TELEM_SERIAL           Serial3
 #define MAKEIT_FA_TELEM_BAUD             250000
 #define MAKEIT_FA_TELEM_INTERVAL_MS      200
 
-// Optional encoder marker pin for logic analyzer. Leave undefined if unused.
-//#define MAKEIT_FA_MARKER_ENCODER_PIN     P1_01  // PLACEHOLDER - CHANGE THIS IF USED
+//#define MAKEIT_FA_MARKER_ENCODER_PIN     P1_01  // OPTIONAL PLACEHOLDER
 '''
 
     ensure_contains(path, marker, lambda text: text.rstrip() + block + "\n")
+
+    # The low-level parser is what makes M879 out-of-band.
+    text = read(path)
+    if re.search(r'^\s*#define\s+EMERGENCY_PARSER\b', text, re.MULTILINE):
+        print(f"ok {path}: EMERGENCY_PARSER enabled")
+    elif re.search(r'^\s*//\s*#define\s+EMERGENCY_PARSER\b', text, re.MULTILINE):
+        text = re.sub(
+            r'^\s*//\s*#define\s+EMERGENCY_PARSER\b.*$',
+            '#define EMERGENCY_PARSER',
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        write(path, text)
+    else:
+        raise RuntimeError("EMERGENCY_PARSER is required for out-of-band M879")
 
 
 def patch_marlin_core() -> None:
@@ -145,14 +155,22 @@ def patch_marlin_core() -> None:
         'makeit_fa_transaction.idle();',
         lambda text: text.replace(
             '    makeit_fa_phase0.idle();',
-            '    makeit_fa_phase0.idle();\n    makeit_fa_transaction.idle();',
+            '    makeit_fa_transaction.idle();\n    makeit_fa_phase0.idle();',
             1,
         ),
     )
 
+    # Consume an emergency M879 before the analyzer can enqueue another segment.
+    text = read(path)
+    old_order = '    makeit_fa_phase0.idle();\n    makeit_fa_transaction.idle();'
+    new_order = '    makeit_fa_transaction.idle();\n    makeit_fa_phase0.idle();'
+    if old_order in text:
+        write(path, text.replace(old_order, new_order, 1))
+    elif new_order in text:
+        print(f"ok {path}: transaction idle precedes analyzer idle")
+
 
 def patch_feature_cpp() -> None:
-    """Patch additions that live in the previously integrated analyzer source."""
     path = "Marlin/src/feature/makeit_filament_analyzer_phase0.cpp"
 
     ensure_contains(
@@ -205,10 +223,9 @@ def patch_feature_cpp() -> None:
         ),
     )
 
-    # Add host-abort state to the compact M875 report too.
     text = read(path)
     compact = '  SERIAL_ECHOPGM(" abort="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);\n  SERIAL_ECHOLNPGM("");'
-    if compact in text and 'SERIAL_ECHOPGM(" host_abort=");' not in text[text.find(compact):text.find(compact) + 300]:
+    if compact in text:
         write(path, text.replace(
             compact,
             '  SERIAL_ECHOPGM(" abort="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);\n  SERIAL_ECHOPGM(" host_abort="); SERIAL_ECHO(tp_host_abort_requested_ ? 1 : 0);\n  SERIAL_ECHOLNPGM("");',
@@ -241,7 +258,6 @@ def patch_gcode_h() -> None:
     ensure_contains(path, 'static void M878();', lambda text: text.replace('    static void M877();', '    static void M877();\n    static void M878();', 1))
     ensure_contains(path, 'static void M879();', lambda text: text.replace('    static void M878();', '    static void M878();\n    static void M879();', 1))
 
-    # Remove obsolete analyzer M876 declaration. Marlin owns M876 for host prompts.
     text = read(path)
     if 'static void M876();' in text:
         write(path, text.replace('    static void M876();\n', ''))
@@ -266,21 +282,12 @@ def patch_gcode_cpp() -> None:
         return text.replace(old, new, 1)
 
     ensure_contains(path, 'case 875: M875(); break;', add_analyzer_commands)
-    ensure_contains(
-        path,
-        'case 874: M874(); break;',
-        lambda text: text.replace(
-            '        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics',
-            '        case 874: M874(); break;                                  // M874: MAKEiT segmented feed diagnostic\n        case 875: M875(); break;                                  // M875: MAKEiT encoder diagnostics',
-            1,
-        ),
-    )
+    ensure_contains(path, 'case 874: M874(); break;', lambda text: text.replace('        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics', '        case 874: M874(); break;                                  // M874: MAKEiT segmented feed diagnostic\n        case 875: M875(); break;                                  // M875: MAKEiT encoder diagnostics', 1))
     ensure_contains(path, 'case 873: M873(); break;', lambda text: text.replace('        case 874: M874(); break;', '        case 873: M873(); break;                                  // M873: MAKEiT evaluated extrusion test point\n        case 874: M874(); break;', 1))
     ensure_contains(path, 'case 877: M877(); break;', lambda text: text.replace('        case 875: M875(); break;', '        case 875: M875(); break;\n        case 877: M877(); break;                                  // M877: MAKEiT idempotent point execute', 1))
     ensure_contains(path, 'case 878: M878(); break;', lambda text: text.replace('        case 877: M877(); break;', '        case 877: M877(); break;\n        case 878: M878(); break;                                  // M878: MAKEiT repeatable result query', 1))
     ensure_contains(path, 'case 879: M879(); break;', lambda text: text.replace('        case 878: M878(); break;', '        case 878: M878(); break;\n        case 879: M879(); break;                                  // M879: MAKEiT graceful point abort', 1))
 
-    # Remove obsolete analyzer M876 case. Marlin owns M876 for HOST_PROMPT_SUPPORT.
     text = read(path)
     obsolete = '        case 876: M876(); break;                                  // M876: MAKEiT filament analyzer segmented feed diagnostic\n'
     if obsolete in text:
