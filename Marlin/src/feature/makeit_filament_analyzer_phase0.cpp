@@ -7,6 +7,9 @@
 
 #include "makeit_filament_analyzer_phase0.h"
 #include "../core/serial.h"
+#include "../module/motion.h"
+#include "../module/planner.h"
+#include "../MarlinCore.h"
 
 #if !PIN_EXISTS(MAKEIT_FA_ENCODER)
   #error "MAKEIT_FILAMENT_ANALYZER_PHASE0 requires MAKEIT_FA_ENCODER_PIN."
@@ -203,6 +206,104 @@ void MakeItFilamentAnalyzerPhase0::telemetry_print_line(const uint32_t seq, cons
     MAKEIT_FA_TELEM_SERIAL.print(F(",mode=")); MAKEIT_FA_TELEM_SERIAL.print(F(MAKEIT_FA_ENCODER_TRIGGER_NAME));
     MAKEIT_FA_TELEM_SERIAL.println();
   #endif
+}
+
+void MakeItFilamentAnalyzerPhase0::segmented_feed_telemetry(const char *tag, const uint32_t seq, const float commanded_mm, const float total_mm, const uint8_t planned_blocks, const uint8_t max_inflight) {
+  #if MAKEIT_FA_TELEM_AVAILABLE
+    MAKEIT_FA_TELEM_SERIAL.print(F("FA1,"));
+    MAKEIT_FA_TELEM_SERIAL.print(F("seq=")); MAKEIT_FA_TELEM_SERIAL.print(seq);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",ms=")); MAKEIT_FA_TELEM_SERIAL.print(millis());
+    MAKEIT_FA_TELEM_SERIAL.print(F(",tag=")); MAKEIT_FA_TELEM_SERIAL.print(tag);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",cmd_mm=")); MAKEIT_FA_TELEM_SERIAL.print(commanded_mm, 3);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",total_mm=")); MAKEIT_FA_TELEM_SERIAL.print(total_mm, 3);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",blocks=")); MAKEIT_FA_TELEM_SERIAL.print(planned_blocks);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",max_blocks=")); MAKEIT_FA_TELEM_SERIAL.print(max_inflight);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",enc=")); MAKEIT_FA_TELEM_SERIAL.print(encoder_events());
+    MAKEIT_FA_TELEM_SERIAL.print(F(",pin=")); MAKEIT_FA_TELEM_SERIAL.print(encoder_pin_state());
+    MAKEIT_FA_TELEM_SERIAL.println();
+  #endif
+}
+
+void MakeItFilamentAnalyzerPhase0::run_segmented_feed_test(float total_mm, float feed_mm_min, float segment_mm, uint8_t max_inflight, uint16_t report_ms) {
+  if (!initialized_) init();
+
+  if (total_mm <= 0.0f || feed_mm_min <= 0.0f || segment_mm <= 0.0f) {
+    SERIAL_ECHOLNPGM("FA1: invalid parameters");
+    return;
+  }
+
+  total_mm = constrain(total_mm, 0.01f, 500.0f);
+  feed_mm_min = constrain(feed_mm_min, 1.0f, 2000.0f);
+  segment_mm = constrain(segment_mm, 0.05f, 0.35f);       // Preserve the 0.70mm cap with two blocks.
+  max_inflight = constrain(max_inflight, uint8_t(1), uint8_t(2));
+  report_ms = constrain(report_ms, uint16_t(50), uint16_t(5000));
+
+  const feedRate_t old_feedrate = feedrate_mm_s;
+  const feedRate_t test_feedrate = feed_mm_min / 60.0f;
+
+  float commanded_mm = 0.0f;
+  uint32_t local_seq = 0;
+  uint32_t enqueued_segments = 0;
+  millis_t next_report_ms = millis();
+
+  sync_plan_position_e();
+
+  segmented_feed_telemetry("start", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
+
+  while (commanded_mm < total_mm) {
+    idle();
+
+    #if MAKEIT_FA_ENCODER_USE_POLLING
+      poll_encoder();
+    #endif
+
+    const uint8_t planned_blocks = planner.movesplanned();
+
+    if (planned_blocks < max_inflight && !planner.is_full()) {
+      const float remaining = total_mm - commanded_mm;
+      const float this_segment = remaining < segment_mm ? remaining : segment_mm;
+
+      destination = current_position;
+      destination.e += this_segment;
+      feedrate_mm_s = test_feedrate;
+      prepare_line_to_destination();
+
+      commanded_mm += this_segment;
+      ++enqueued_segments;
+    }
+
+    const millis_t now = millis();
+    if ((int32_t)(now - next_report_ms) >= 0) {
+      next_report_ms = now + report_ms;
+      segmented_feed_telemetry("run", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
+    }
+  }
+
+  while (planner.movesplanned()) {
+    idle();
+
+    #if MAKEIT_FA_ENCODER_USE_POLLING
+      poll_encoder();
+    #endif
+
+    const millis_t now = millis();
+    if ((int32_t)(now - next_report_ms) >= 0) {
+      next_report_ms = now + report_ms;
+      segmented_feed_telemetry("drain", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
+    }
+  }
+
+  feedrate_mm_s = old_feedrate;
+
+  segmented_feed_telemetry("done", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
+
+  SERIAL_ECHOPGM("FA1: done total_mm="); SERIAL_ECHO(total_mm);
+  SERIAL_ECHOPGM(" segment_mm="); SERIAL_ECHO(segment_mm);
+  SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(feed_mm_min);
+  SERIAL_ECHOPGM(" max_blocks="); SERIAL_ECHO(max_inflight);
+  SERIAL_ECHOPGM(" enqueued="); SERIAL_ECHO(enqueued_segments);
+  SERIAL_ECHOPGM(" enc="); SERIAL_ECHO(encoder_events());
+  SERIAL_ECHOLNPGM("");
 }
 
 void MakeItFilamentAnalyzerPhase0::report_to_host() {
