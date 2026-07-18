@@ -1,5 +1,5 @@
 /**
- * MAKEiT Filament Analyzer - Phase 0 / 1 / 2 / 3 / 4 bring-up
+ * MAKEiT Filament Analyzer - Phase 0 / 1 / 2 / 3 / 4 / 6 bring-up
  *
  * Purpose:
  *   - Count filament encoder events.
@@ -9,13 +9,14 @@
  *   - Optionally monitor rolling feed efficiency and gracefully stop adding
  *     segments after confirmed mid-point feed loss.
  *   - Optionally monitor encoder pulse gaps for faster feed-loss response.
+ *   - Accept a host-requested graceful abort for an active transaction.
  *   - Optionally stream raw telemetry on a dedicated one-way UART.
  *
  * This file intentionally does NOT implement:
  *   - automatic temperature sweep / Qmax campaign logic
  *   - recovery logic
  *   - TMC load classification
- *   - M877/M878/M879 production transaction layer
+ *   - persistent result storage across controller reset
  */
 #pragma once
 
@@ -39,6 +40,7 @@ public:
     TP_RESULT_NONE = 0,
     TP_RESULT_PASS,
     TP_RESULT_LOW_FEED,
+    TP_RESULT_ABORTED,
     TP_RESULT_INVALID_TEMP,
     TP_RESULT_ERROR
   };
@@ -76,7 +78,7 @@ public:
    * The hotend must already be at a non-zero target and within temp_tolerance
    * of that target. The command resets the encoder, runs the validated
    * segmented-motion engine, samples temperature and heater power, and reports
-   * PASS, LOW_FEED, INVALID_TEMP, or ERROR.
+   * PASS, LOW_FEED, ABORTED, INVALID_TEMP, or ERROR.
    *
    * When auto_stop_enabled is true, rolling encoder efficiency is checked in
    * monitor_window_mm windows. After monitor_confirm_windows consecutive
@@ -99,13 +101,15 @@ public:
   );
 
   /**
-   * Configure Phase-4 pulse-gap monitoring for the next/current M873 point.
+   * Request a controlled host abort of the active point.
    *
-   * gap_factor scales the expected encoder-event interval.
-   * min_gap_ms is an absolute lower bound on the timeout.
-   * min_missing_events requires enough commanded travel without a new edge
-   * before the graceful stop is requested.
+   * The request stops new segment enqueueing and drains only the bounded
+   * in-flight horizon. It returns false when no point is active or when the
+   * segmented engine is already in its terminal drain.
    */
+  static bool request_host_abort();
+
+  /** Configure Phase-4 pulse-gap monitoring for the next/current M873 point. */
   static void configure_pulse_gap_monitor(
     bool enabled,
     float gap_factor,
@@ -117,6 +121,7 @@ public:
   static void report_test_point();
   static bool test_point_active() { return tp_active_; }
   static bool segmented_feed_active() { return seg_active_; }
+  static bool host_abort_requested() { return tp_host_abort_requested_; }
 
 private:
   static volatile uint32_t encoder_events_;
@@ -170,6 +175,7 @@ private:
 
   static bool tp_auto_stop_enabled_;
   static bool tp_abort_triggered_;
+  static bool tp_host_abort_requested_;
   static float tp_monitor_window_mm_;
   static float tp_monitor_efficiency_pct_;
   static uint8_t tp_monitor_confirm_windows_;
