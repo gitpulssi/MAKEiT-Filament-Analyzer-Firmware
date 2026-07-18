@@ -1,5 +1,5 @@
 /**
- * MAKEiT Filament Analyzer - Phase 0 / Phase 1 bring-up
+ * MAKEiT Filament Analyzer - Phase 0 / Phase 1 / Phase 2 bring-up
  */
 #include "../inc/MarlinConfig.h"
 
@@ -9,6 +9,7 @@
 #include "../core/serial.h"
 #include "../module/motion.h"
 #include "../module/planner.h"
+#include "../module/temperature.h"
 #include "../MarlinCore.h"
 
 #if !PIN_EXISTS(MAKEIT_FA_ENCODER)
@@ -61,6 +62,30 @@ uint32_t MakeItFilamentAnalyzerPhase0::seg_seq_ = 0;
 uint32_t MakeItFilamentAnalyzerPhase0::seg_enqueued_segments_ = 0;
 uint32_t MakeItFilamentAnalyzerPhase0::seg_next_report_ms_ = 0;
 feedRate_t MakeItFilamentAnalyzerPhase0::seg_old_feedrate_ = 0.0f;
+
+bool MakeItFilamentAnalyzerPhase0::tp_active_ = false;
+bool MakeItFilamentAnalyzerPhase0::tp_has_result_ = false;
+bool MakeItFilamentAnalyzerPhase0::tp_temp_valid_ = false;
+MakeItFilamentAnalyzerPhase0::TestPointResult MakeItFilamentAnalyzerPhase0::tp_result_ = MakeItFilamentAnalyzerPhase0::TP_RESULT_NONE;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_generation_ = 0;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_started_ms_ = 0;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_finished_ms_ = 0;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_next_sample_ms_ = 0;
+float MakeItFilamentAnalyzerPhase0::tp_total_mm_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::tp_feed_mm_min_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::tp_encoder_events_per_mm_ = 0.685f;
+float MakeItFilamentAnalyzerPhase0::tp_pass_efficiency_pct_ = 95.0f;
+float MakeItFilamentAnalyzerPhase0::tp_temp_target_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::tp_temp_tolerance_ = 2.0f;
+float MakeItFilamentAnalyzerPhase0::tp_temp_sum_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::tp_temp_min_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::tp_temp_max_ = 0.0f;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_temp_samples_ = 0;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_heater_sum_ = 0;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_heater_samples_ = 0;
+float MakeItFilamentAnalyzerPhase0::tp_expected_events_ = 0.0f;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_actual_events_ = 0;
+float MakeItFilamentAnalyzerPhase0::tp_efficiency_pct_ = 0.0f;
 
 MakeItFilamentAnalyzerPhase0 makeit_fa_phase0;
 
@@ -189,6 +214,7 @@ void MakeItFilamentAnalyzerPhase0::idle() {
   #endif
 
   service_segmented_feed();
+  service_test_point();
 
   if (!stream_enabled_) return;
 
@@ -235,21 +261,24 @@ void MakeItFilamentAnalyzerPhase0::segmented_feed_telemetry(const char *tag, con
     MAKEIT_FA_TELEM_SERIAL.print(F(",max_blocks=")); MAKEIT_FA_TELEM_SERIAL.print(max_inflight);
     MAKEIT_FA_TELEM_SERIAL.print(F(",enc=")); MAKEIT_FA_TELEM_SERIAL.print(encoder_events());
     MAKEIT_FA_TELEM_SERIAL.print(F(",pin=")); MAKEIT_FA_TELEM_SERIAL.print(encoder_pin_state());
+    MAKEIT_FA_TELEM_SERIAL.print(F(",temp=")); MAKEIT_FA_TELEM_SERIAL.print(thermalManager.degHotend(0), 2);
+    MAKEIT_FA_TELEM_SERIAL.print(F(",target=")); MAKEIT_FA_TELEM_SERIAL.print(thermalManager.degTargetHotend(0));
+    MAKEIT_FA_TELEM_SERIAL.print(F(",heater=")); MAKEIT_FA_TELEM_SERIAL.print(thermalManager.getHeaterPower(H_E0));
     MAKEIT_FA_TELEM_SERIAL.println();
   #endif
 }
 
-void MakeItFilamentAnalyzerPhase0::run_segmented_feed_test(float total_mm, float feed_mm_min, float segment_mm, uint8_t max_inflight, uint16_t report_ms) {
+bool MakeItFilamentAnalyzerPhase0::run_segmented_feed_test(float total_mm, float feed_mm_min, float segment_mm, uint8_t max_inflight, uint16_t report_ms) {
   if (!initialized_) init();
 
   if (seg_active_) {
     SERIAL_ECHOLNPGM("FA1: busy");
-    return;
+    return false;
   }
 
   if (total_mm <= 0.0f || feed_mm_min <= 0.0f || segment_mm <= 0.0f) {
     SERIAL_ECHOLNPGM("FA1: invalid parameters");
-    return;
+    return false;
   }
 
   seg_total_mm_ = constrain(total_mm, 0.01f, 500.0f);
@@ -274,6 +303,7 @@ void MakeItFilamentAnalyzerPhase0::run_segmented_feed_test(float total_mm, float
   SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(seg_feed_mm_min_);
   SERIAL_ECHOPGM(" max_blocks="); SERIAL_ECHO(seg_max_inflight_);
   SERIAL_ECHOLNPGM("");
+  return true;
 }
 
 void MakeItFilamentAnalyzerPhase0::service_segmented_feed() {
@@ -326,6 +356,209 @@ void MakeItFilamentAnalyzerPhase0::service_segmented_feed() {
   }
 }
 
+bool MakeItFilamentAnalyzerPhase0::start_evaluated_test_point(
+  float total_mm,
+  float feed_mm_min,
+  float segment_mm,
+  uint8_t max_inflight,
+  uint16_t report_ms,
+  float encoder_events_per_mm,
+  float pass_efficiency_pct,
+  float temp_tolerance
+) {
+  if (!initialized_) init();
+
+  if (tp_active_ || seg_active_) {
+    SERIAL_ECHOLNPGM("FA2: busy");
+    return false;
+  }
+
+  total_mm = constrain(total_mm, 20.0f, 500.0f);
+  encoder_events_per_mm = constrain(encoder_events_per_mm, 0.01f, 100.0f);
+  pass_efficiency_pct = constrain(pass_efficiency_pct, 50.0f, 105.0f);
+  temp_tolerance = constrain(temp_tolerance, 0.5f, 15.0f);
+
+  const float current_temp = thermalManager.degHotend(0);
+  const float target_temp = thermalManager.degTargetHotend(0);
+
+  ++tp_generation_;
+  tp_has_result_ = false;
+  tp_result_ = TP_RESULT_NONE;
+  tp_total_mm_ = total_mm;
+  tp_feed_mm_min_ = feed_mm_min;
+  tp_encoder_events_per_mm_ = encoder_events_per_mm;
+  tp_pass_efficiency_pct_ = pass_efficiency_pct;
+  tp_temp_target_ = target_temp;
+  tp_temp_tolerance_ = temp_tolerance;
+  tp_expected_events_ = total_mm * encoder_events_per_mm;
+  tp_actual_events_ = 0;
+  tp_efficiency_pct_ = 0.0f;
+  tp_started_ms_ = millis();
+  tp_finished_ms_ = 0;
+  tp_temp_sum_ = 0.0f;
+  tp_temp_min_ = current_temp;
+  tp_temp_max_ = current_temp;
+  tp_temp_samples_ = 0;
+  tp_heater_sum_ = 0;
+  tp_heater_samples_ = 0;
+  tp_temp_valid_ = true;
+
+  if (target_temp <= 0.0f || !thermalManager.hotEnoughToExtrude(0)) {
+    tp_result_ = TP_RESULT_ERROR;
+    tp_has_result_ = true;
+    tp_finished_ms_ = millis();
+    SERIAL_ECHOPGM("FA2: result=ERROR gen="); SERIAL_ECHO(tp_generation_);
+    SERIAL_ECHOPGM(" reason=cold_or_no_target temp="); SERIAL_ECHO(current_temp);
+    SERIAL_ECHOPGM(" target="); SERIAL_ECHO(target_temp);
+    SERIAL_ECHOLNPGM("");
+    return false;
+  }
+
+  if (ABS(current_temp - target_temp) > temp_tolerance) {
+    tp_result_ = TP_RESULT_INVALID_TEMP;
+    tp_has_result_ = true;
+    tp_temp_valid_ = false;
+    tp_finished_ms_ = millis();
+    SERIAL_ECHOPGM("FA2: result=INVALID_TEMP gen="); SERIAL_ECHO(tp_generation_);
+    SERIAL_ECHOPGM(" reason=not_stable temp="); SERIAL_ECHO(current_temp);
+    SERIAL_ECHOPGM(" target="); SERIAL_ECHO(target_temp);
+    SERIAL_ECHOPGM(" tolerance="); SERIAL_ECHO(temp_tolerance);
+    SERIAL_ECHOLNPGM("");
+    return false;
+  }
+
+  reset_encoder();
+  tp_active_ = true;
+  tp_next_sample_ms_ = millis();
+  sample_test_point();
+
+  if (!run_segmented_feed_test(total_mm, feed_mm_min, segment_mm, max_inflight, report_ms)) {
+    tp_active_ = false;
+    tp_result_ = TP_RESULT_ERROR;
+    tp_has_result_ = true;
+    tp_finished_ms_ = millis();
+    SERIAL_ECHOPGM("FA2: result=ERROR gen="); SERIAL_ECHO(tp_generation_);
+    SERIAL_ECHOLNPGM(" reason=motion_start_failed");
+    return false;
+  }
+
+  SERIAL_ECHOPGM("FA2: started gen="); SERIAL_ECHO(tp_generation_);
+  SERIAL_ECHOPGM(" total_mm="); SERIAL_ECHO(tp_total_mm_);
+  SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(tp_feed_mm_min_);
+  SERIAL_ECHOPGM(" expected_enc="); SERIAL_ECHO(tp_expected_events_);
+  SERIAL_ECHOPGM(" pass_pct="); SERIAL_ECHO(tp_pass_efficiency_pct_);
+  SERIAL_ECHOPGM(" temp_target="); SERIAL_ECHO(tp_temp_target_);
+  SERIAL_ECHOPGM(" temp_tol="); SERIAL_ECHO(tp_temp_tolerance_);
+  SERIAL_ECHOLNPGM("");
+  return true;
+}
+
+void MakeItFilamentAnalyzerPhase0::sample_test_point() {
+  const float temp = thermalManager.degHotend(0);
+  int16_t heater = thermalManager.getHeaterPower(H_E0);
+  if (heater < 0) heater = 0;
+
+  if (tp_temp_samples_ == 0) {
+    tp_temp_min_ = temp;
+    tp_temp_max_ = temp;
+  }
+  else {
+    if (temp < tp_temp_min_) tp_temp_min_ = temp;
+    if (temp > tp_temp_max_) tp_temp_max_ = temp;
+  }
+
+  tp_temp_sum_ += temp;
+  ++tp_temp_samples_;
+  tp_heater_sum_ += uint16_t(heater);
+  ++tp_heater_samples_;
+
+  if (ABS(temp - tp_temp_target_) > tp_temp_tolerance_)
+    tp_temp_valid_ = false;
+}
+
+void MakeItFilamentAnalyzerPhase0::service_test_point() {
+  if (!tp_active_) return;
+
+  const uint32_t now = millis();
+  if ((int32_t)(now - tp_next_sample_ms_) >= 0) {
+    tp_next_sample_ms_ = now + 100UL;
+    sample_test_point();
+  }
+
+  if (!seg_active_)
+    finish_test_point();
+}
+
+const char* MakeItFilamentAnalyzerPhase0::test_point_result_name(const TestPointResult result) {
+  switch (result) {
+    case TP_RESULT_PASS:         return "PASS";
+    case TP_RESULT_LOW_FEED:     return "LOW_FEED";
+    case TP_RESULT_INVALID_TEMP: return "INVALID_TEMP";
+    case TP_RESULT_ERROR:        return "ERROR";
+    default:                     return "NONE";
+  }
+}
+
+void MakeItFilamentAnalyzerPhase0::finish_test_point() {
+  sample_test_point();
+
+  tp_actual_events_ = encoder_events();
+  tp_efficiency_pct_ = tp_expected_events_ > 0.0f
+    ? (float(tp_actual_events_) * 100.0f / tp_expected_events_)
+    : 0.0f;
+
+  if (!tp_temp_valid_ || tp_temp_samples_ == 0)
+    tp_result_ = TP_RESULT_INVALID_TEMP;
+  else if (tp_efficiency_pct_ >= tp_pass_efficiency_pct_)
+    tp_result_ = TP_RESULT_PASS;
+  else
+    tp_result_ = TP_RESULT_LOW_FEED;
+
+  tp_finished_ms_ = millis();
+  tp_active_ = false;
+  tp_has_result_ = true;
+  report_test_point();
+}
+
+void MakeItFilamentAnalyzerPhase0::report_test_point() {
+  if (tp_active_) {
+    SERIAL_ECHOPGM("FA2: state=RUNNING gen="); SERIAL_ECHO(tp_generation_);
+    SERIAL_ECHOPGM(" cmd_mm="); SERIAL_ECHO(seg_commanded_mm_);
+    SERIAL_ECHOPGM(" total_mm="); SERIAL_ECHO(tp_total_mm_);
+    SERIAL_ECHOPGM(" enc="); SERIAL_ECHO(encoder_events());
+    SERIAL_ECHOPGM(" expected_enc="); SERIAL_ECHO(tp_expected_events_);
+    SERIAL_ECHOPGM(" temp="); SERIAL_ECHO(thermalManager.degHotend(0));
+    SERIAL_ECHOPGM(" target="); SERIAL_ECHO(tp_temp_target_);
+    SERIAL_ECHOPGM(" heater="); SERIAL_ECHO(thermalManager.getHeaterPower(H_E0));
+    SERIAL_ECHOLNPGM("");
+    return;
+  }
+
+  if (!tp_has_result_) {
+    SERIAL_ECHOLNPGM("FA2: state=IDLE result=NONE");
+    return;
+  }
+
+  const float temp_avg = tp_temp_samples_ ? tp_temp_sum_ / float(tp_temp_samples_) : 0.0f;
+  const float heater_avg = tp_heater_samples_ ? float(tp_heater_sum_) / float(tp_heater_samples_) : 0.0f;
+
+  SERIAL_ECHOPGM("FA2: result="); SERIAL_ECHOPGM(test_point_result_name(tp_result_));
+  SERIAL_ECHOPGM(" gen="); SERIAL_ECHO(tp_generation_);
+  SERIAL_ECHOPGM(" duration_ms="); SERIAL_ECHO(tp_finished_ms_ - tp_started_ms_);
+  SERIAL_ECHOPGM(" total_mm="); SERIAL_ECHO(tp_total_mm_);
+  SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(tp_feed_mm_min_);
+  SERIAL_ECHOPGM(" expected_enc="); SERIAL_ECHO(tp_expected_events_);
+  SERIAL_ECHOPGM(" actual_enc="); SERIAL_ECHO(tp_actual_events_);
+  SERIAL_ECHOPGM(" efficiency_pct="); SERIAL_ECHO(tp_efficiency_pct_);
+  SERIAL_ECHOPGM(" pass_pct="); SERIAL_ECHO(tp_pass_efficiency_pct_);
+  SERIAL_ECHOPGM(" temp_target="); SERIAL_ECHO(tp_temp_target_);
+  SERIAL_ECHOPGM(" temp_avg="); SERIAL_ECHO(temp_avg);
+  SERIAL_ECHOPGM(" temp_min="); SERIAL_ECHO(tp_temp_min_);
+  SERIAL_ECHOPGM(" temp_max="); SERIAL_ECHO(tp_temp_max_);
+  SERIAL_ECHOPGM(" heater_avg_raw="); SERIAL_ECHO(heater_avg);
+  SERIAL_ECHOLNPGM("");
+}
+
 void MakeItFilamentAnalyzerPhase0::report_to_host() {
   #if MAKEIT_FA_ENCODER_USE_POLLING
     poll_encoder();
@@ -344,6 +577,7 @@ void MakeItFilamentAnalyzerPhase0::report_to_host() {
   SERIAL_ECHOPGM(" mode="); SERIAL_ECHOPGM(MAKEIT_FA_ENCODER_TRIGGER_NAME);
   SERIAL_ECHOPGM(" poll="); SERIAL_ECHO(MAKEIT_FA_ENCODER_USE_POLLING ? 1 : 0);
   SERIAL_ECHOPGM(" seg="); SERIAL_ECHO(seg_active_ ? 1 : 0);
+  SERIAL_ECHOPGM(" tp="); SERIAL_ECHO(tp_active_ ? 1 : 0);
   SERIAL_ECHOLNPGM("");
 }
 
