@@ -1,8 +1,14 @@
-# MAKEiT Filament Analyzer — Phase 0 / Phase 1
+# MAKEiT Filament Analyzer — Phase 0 / Phase 1 / Phase 2
 
-Phase 0 proves the encoder and telemetry path. Phase 1 adds an open-loop segmented E-only feed diagnostic before any automatic flow-test logic exists.
+The firmware is now split into three usable layers:
 
-## Hardware locked for Phase 0 / 1
+- **Phase 0:** encoder counting and calibration with `M875`.
+- **Phase 1:** open-loop segmented E-only motion with `M874`.
+- **Phase 2:** one evaluated extrusion point with `M873`.
+
+Phase 2 is the first command that converts raw encoder movement into an automatic terminal result.
+
+## Hardware
 
 ```text
 Controller:
@@ -14,65 +20,15 @@ Encoder input:
 Telemetry:
   SKR Pro TFT TX3 -> Raspberry Pi RX2
   SKR Pro GND     -> Raspberry Pi GND
-  SKR Pro TFT RX3 disconnected for Phase 0 / 1
-  Pi TX2          disconnected for Phase 0 / 1
+  SKR Pro TFT RX3 disconnected during bring-up
+  Pi TX2          disconnected during bring-up
 ```
 
 The telemetry link is one-way. OctoPrint remains the only commander on the normal printer serial connection.
 
-## Firmware commands
-
-Segmented-feed diagnostic:
-
-```text
-M874 L20 F100 S0.35 B2 I250
-```
-
-Parameters:
-
-```text
-L  total forward filament length in mm. Default 10.0.
-F  filament feed rate in mm/min. Default 100.0.
-S  segment length in mm. Default 0.35. Clamped to 0.05..0.35.
-B  maximum in-flight planner blocks. Default 2. Clamped to 1..2.
-I  FA1 telemetry interval in ms while the non-blocking test runs. Default 250.
-```
-
-`M874` is open-loop. It does not stop based on encoder efficiency. It starts a non-blocking firmware-generated E-only segmented feed test. Segments are enqueued from Marlin `idle()` so the watchdog and normal background tasks remain serviced.
-
-Encoder diagnostics:
-
-```text
-M875       report encoder count
-M875 R     reset encoder count
-M875 S1    enable FA0 telemetry stream on Serial3
-M875 S0    disable FA0 telemetry stream
-M875 I200  set telemetry interval to 200 ms
-```
-
-`M876` is intentionally not used because Marlin's `HOST_PROMPT_SUPPORT` uses that command number.
-
-Example `M875` host response:
-
-```text
-FA0: enc=0 last_edge_us=123456 pin=0 stream=0 interval_ms=200 mode=RISING poll=1 seg=0
-```
-
-Example `FA0` telemetry record:
-
-```text
-FA0,seq=12,ms=45820,enc=381,last_edge_us=45810122,pin=1,mode=RISING
-```
-
-Example `FA1` telemetry record during `M874`:
-
-```text
-FA1,seq=4,ms=123456,tag=run,cmd_mm=4.550,total_mm=20.000,blocks=2,max_blocks=2,enc=12,pin=1
-```
-
 ## Integration
 
-The analyzer files are present in the firmware tree. Run this once from the repository root to patch the Marlin hooks and config:
+Run this from the repository root after pulling the analyzer branch:
 
 ```bash
 python tools/makeit-fa/integrate_phase0.py
@@ -80,105 +36,172 @@ python tools/makeit-fa/integrate_phase0.py
 
 The script:
 
-- disables `SERIAL_PORT_3 3` so analyzer telemetry can own `Serial3` directly;
-- appends the analyzer config block to `Configuration_adv.h`;
+- disables `SERIAL_PORT_3 3` so analyzer telemetry owns `Serial3`;
+- appends the analyzer configuration block to `Configuration_adv.h`;
 - adds `makeit_fa_phase0.init()` to `setup()`;
 - adds `makeit_fa_phase0.idle()` to `idle()`;
-- declares `M874` and `M875` in `gcode.h`;
-- dispatches `M874` and `M875` in `gcode.cpp`;
-- removes obsolete analyzer `M876` hooks from earlier local test runs.
+- declares and dispatches `M873`, `M874`, and `M875`;
+- removes obsolete analyzer `M876` hooks, because Marlin already uses `M876` for host prompts.
 
-## Encoder calibration result
-
-Current measured result:
+## Phase 0 — M875 encoder diagnostics
 
 ```text
-physical length:       400 mm
-encoder events:        274
-count mode:            RISING
-count method:          polling fallback
-speed check:           100 mm/min and 500 mm/min both gave 274 events
-encoder events/mm:     0.685
-encoder mm/event:      1.460
-selected segment:      0.35 mm
+M875       report encoder count and analyzer state
+M875 R     reset encoder count
+M875 S1    enable FA0 telemetry stream on Serial3
+M875 S0    disable FA0 telemetry stream
+M875 I200  set telemetry interval to 200 ms
 ```
 
-## Encoder calibration procedure
-
-Use physical filament marks, not commanded E distance.
-
-1. Mark the filament with two marks 300–500 mm apart.
-2. Measure the mark spacing independently of the printer.
-3. Feed slowly and stop mark 1 exactly at a fixed hard reference edge.
-4. Send `M875 R`.
-5. Feed slowly and stop mark 2 at the same reference edge.
-6. Send `M875`.
-7. Record encoder count, physical length, feed speed, and trigger mode.
-8. Repeat 3–5 times at low speed and once at a second speed.
-
-Create a calibration CSV:
-
-```csv
-physical_length_mm,encoder_events
-400.0,274
-400.0,274
-400.0,274
-```
-
-Calculate encoder geometry and segment beat values:
-
-```bash
-python tools/makeit-fa/encoder_calculation.py calibration_runs.csv --segment-mm 0.35
-```
-
-## First segmented-feed test
-
-Heat the hotend to a safe extrusion temperature before running `M874`; the diagnostic uses normal Marlin extrusion motion and does not bypass cold-extrusion protection.
-
-Start conservative:
-
-```gcode
-M875 R
-M874 L20 F100 S0.35 B2 I250
-```
-
-`M874` returns immediately with a `FA1: started ...` line. Wait for the later asynchronous completion line:
+Example response:
 
 ```text
-FA1: done total_mm=20 segment_mm=0.35 feed_mm_min=100 max_blocks=2 enqueued=58 enc=...
+FA0: enc=68 last_edge_us=123456 pin=0 stream=0 interval_ms=200 mode=RISING poll=1 seg=0 tp=0
 ```
 
-Then query the encoder count:
+### Locked encoder calibration
+
+```text
+physical filament movement: 400 mm
+encoder events:             274
+count mode:                 RISING
+count method:               polling fallback
+encoder events/mm:          0.685
+encoder mm/event:           1.460
+selected segment length:    0.35 mm
+```
+
+The feeder E-steps were calibrated afterward. With calibrated E-steps, both normal `G1 E100` and segmented `M874 L100` produced 68–69 encoder events at `F100` and `F500`.
+
+## Phase 1 — M874 segmented-feed diagnostic
 
 ```gcode
-M875
+M874 L100 F500 S0.35 B2 I250
 ```
 
-Then try a faster open-loop run:
+Parameters:
+
+```text
+L  total commanded filament length in mm. Default 10.
+F  filament feed rate in mm/min. Default 100.
+S  segment length in mm. Default 0.35; clamped to 0.05..0.35.
+B  maximum in-flight planner blocks. Default 2; clamped to 1..2.
+I  FA1 telemetry interval in ms. Default 250.
+```
+
+`M874` is non-blocking and open-loop. It returns immediately, enqueues segments from Marlin `idle()`, and later emits:
+
+```text
+FA1: done total_mm=100 segment_mm=0.35 feed_mm_min=500 max_blocks=2 enqueued=286 enc=68
+```
+
+It does not decide pass or fail.
+
+## Phase 2 — M873 evaluated extrusion point
+
+Heat and stabilize the hotend first:
 
 ```gcode
-M875 R
-M874 L20 F500 S0.35 B2 I250
+M109 S240
 ```
 
-Again, wait for `FA1: done ...`, then query:
+Then start one evaluated point:
 
 ```gcode
-M875
+M873 L100 F500 S0.35 B2 I250 C0.685 P95 D2
 ```
 
-For the real timing test, capture E STEP with a logic analyzer and compare continuous G1 feed against `M874` segmented feed.
+Parameters:
 
-## Phase-0 / 1 safety
+```text
+L  test filament length in mm. Default 100; clamped to 20..500.
+F  filament feed rate in mm/min. Default 100.
+S  segment length in mm. Default 0.35; clamped to 0.05..0.35.
+B  maximum in-flight planner blocks. Default 2; clamped to 1..2.
+I  FA1 telemetry interval in ms. Default 250.
+C  calibrated encoder events per physical filament mm. Default 0.685.
+P  minimum passing feed efficiency percent. Default 95.
+D  maximum allowed deviation from the current hotend target in °C. Default 2.
+Q  query the active point or the latest stored terminal result.
+```
 
-Keep Marlin thermal runaway and max-temperature protection enabled. These blocks have no encoder-based automatic abort. Use normal printer controls and `M112` as the hard emergency stop.
+The command requires:
 
-## What is intentionally not included yet
+- a non-zero hotend target;
+- a hotend warm enough for normal Marlin extrusion;
+- current temperature within `D` degrees of the target.
 
-- no encoder-based stop;
-- no feed-efficiency threshold;
-- no recovery classifier;
-- no Qmax campaign;
-- no `M877` / `M878` / `M879` transaction layer.
+It resets the encoder automatically and uses the validated `M874` segmented-motion engine. During the point it samples:
 
-The next build block after `M874` validation adds lower-level executed E-step timing and more detailed raw timing telemetry if the segmented feed looks clean.
+```text
+encoder events
+temperature
+temperature minimum / maximum / average
+heater power returned by Marlin
+```
+
+Expected encoder events are calculated as:
+
+```text
+expected_events = L × C
+```
+
+Feed efficiency is:
+
+```text
+efficiency_pct = actual_events / expected_events × 100
+```
+
+Terminal classifications:
+
+```text
+PASS          efficiency >= P and temperature remained within D
+LOW_FEED      efficiency < P and temperature remained within D
+INVALID_TEMP  temperature left the allowed band during the point
+ERROR         no valid hotend target, hotend too cold, or motion could not start
+```
+
+Example start output:
+
+```text
+FA2: started gen=1 total_mm=100 feed_mm_min=500 expected_enc=68.50 pass_pct=95 temp_target=240 temp_tol=2
+```
+
+Example terminal output:
+
+```text
+FA2: result=PASS gen=1 duration_ms=12050 total_mm=100 feed_mm_min=500 expected_enc=68.50 actual_enc=68 efficiency_pct=99.27 pass_pct=95 temp_target=240 temp_avg=239.8 temp_min=239.2 temp_max=240.5 heater_avg_raw=118.4
+```
+
+Query while running or after completion:
+
+```gcode
+M873 Q
+```
+
+While active it reports `state=RUNNING`; after completion it repeats the stored terminal result without re-running extrusion.
+
+## Dedicated telemetry
+
+`FA1` records now also include the hotend temperature, target, and heater-power value:
+
+```text
+FA1,seq=4,ms=123456,tag=run,cmd_mm=4.550,total_mm=100.000,blocks=2,max_blocks=2,enc=3,pin=1,temp=239.80,target=240,heater=118
+```
+
+## Safety and current limits
+
+Marlin thermal runaway, maximum-temperature protection, and cold-extrusion protection remain active.
+
+Phase 2 evaluates a point only after it finishes. It does **not** yet stop midway on falling encoder efficiency. Use normal printer controls and `M112` as the hard emergency stop.
+
+Not implemented yet:
+
+- mid-point encoder-based abort;
+- pulse-gap failure detection;
+- automatic recovery;
+- automatic temperature / speed campaign;
+- TMC load classification;
+- `M877` / `M878` / `M879` production transaction layer.
+
+The next code layer is mid-point feed-loss detection with a controlled stop, using thresholds derived from completed Phase-2 points.
