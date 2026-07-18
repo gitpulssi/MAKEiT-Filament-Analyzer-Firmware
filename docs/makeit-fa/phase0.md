@@ -22,20 +22,10 @@ The telemetry link is one-way. OctoPrint remains the only commander on the norma
 
 ## Firmware commands
 
-Encoder diagnostics:
-
-```text
-M875       report encoder count
-M875 R     reset encoder count
-M875 S1    enable FA0 telemetry stream on Serial3
-M875 S0    disable FA0 telemetry stream
-M875 I200  set telemetry interval to 200 ms
-```
-
 Segmented-feed diagnostic:
 
 ```text
-M876 L20 F100 S0.35 B2 I250
+M874 L20 F100 S0.35 B2 I250
 ```
 
 Parameters:
@@ -48,7 +38,19 @@ B  maximum in-flight planner blocks. Default 2. Clamped to 1..2.
 I  FA1 telemetry interval in ms while the blocking test runs. Default 250.
 ```
 
-`M876` is open-loop. It does not stop based on encoder efficiency. It only commands firmware-generated E-only segments while keeping the planner occupancy capped.
+`M874` is open-loop. It does not stop based on encoder efficiency. It only commands firmware-generated E-only segments while keeping the planner occupancy capped.
+
+Encoder diagnostics:
+
+```text
+M875       report encoder count
+M875 R     reset encoder count
+M875 S1    enable FA0 telemetry stream on Serial3
+M875 S0    disable FA0 telemetry stream
+M875 I200  set telemetry interval to 200 ms
+```
+
+`M876` is intentionally not used because Marlin's `HOST_PROMPT_SUPPORT` uses that command number.
 
 Example `M875` host response:
 
@@ -62,7 +64,7 @@ Example `FA0` telemetry record:
 FA0,seq=12,ms=45820,enc=381,last_edge_us=45810122,pin=1,mode=RISING
 ```
 
-Example `FA1` telemetry record during `M876`:
+Example `FA1` telemetry record during `M874`:
 
 ```text
 FA1,seq=4,ms=123456,tag=run,cmd_mm=4.550,total_mm=20.000,blocks=2,max_blocks=2,enc=12,pin=1
@@ -82,8 +84,9 @@ The script:
 - appends the analyzer config block to `Configuration_adv.h`;
 - adds `makeit_fa_phase0.init()` to `setup()`;
 - adds `makeit_fa_phase0.idle()` to `idle()`;
-- declares `M875` and `M876` in `gcode.h`;
-- dispatches `M875` and `M876` in `gcode.cpp`.
+- declares `M874` and `M875` in `gcode.h`;
+- dispatches `M874` and `M875` in `gcode.cpp`;
+- removes obsolete analyzer `M876` hooks from earlier local test runs.
 
 ## Encoder calibration result
 
@@ -130,13 +133,13 @@ python tools/makeit-fa/encoder_calculation.py calibration_runs.csv --segment-mm 
 
 ## First segmented-feed test
 
-Heat the hotend to a safe extrusion temperature before running `M876`; the diagnostic uses normal Marlin extrusion motion and does not bypass cold-extrusion protection.
+Heat the hotend to a safe extrusion temperature before running `M874`; the diagnostic uses normal Marlin extrusion motion and does not bypass cold-extrusion protection.
 
 Start conservative:
 
 ```gcode
 M875 R
-M876 L20 F100 S0.35 B2 I250
+M874 L20 F100 S0.35 B2 I250
 M875
 ```
 
@@ -144,7 +147,7 @@ Then try a faster open-loop run:
 
 ```gcode
 M875 R
-M876 L20 F500 S0.35 B2 I250
+M874 L20 F500 S0.35 B2 I250
 M875
 ```
 
@@ -154,7 +157,7 @@ Expected host completion line:
 FA1: done total_mm=20 segment_mm=0.35 feed_mm_min=100 max_blocks=2 enqueued=58 enc=...
 ```
 
-For the real timing test, capture E STEP with a logic analyzer and compare continuous G1 feed against `M876` segmented feed.
+For the real timing test, capture E STEP with a logic analyzer and compare continuous G1 feed against `M874` segmented feed.
 
 ## Phase-0 / 1 safety
 
@@ -168,4 +171,4 @@ Keep Marlin thermal runaway and max-temperature protection enabled. These blocks
 - no Qmax campaign;
 - no `M877` / `M878` / `M879` transaction layer.
 
-The next build block after `M876` validation adds lower-level executed E-step timing and more detailed raw timing telemetry if the segmented feed looks clean.
+The next build block after `M874` validation adds lower-level executed E-step timing and more detailed raw timing telemetry if the segmented feed looks clean.
