@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrate MAKEiT Filament Analyzer Phase-0/1/2/3/4/5 hooks into Marlin.
+"""Integrate MAKEiT Filament Analyzer Phase-0/1/2/3/4/5/6 hooks into Marlin.
 
 Run from the repository root:
 
@@ -67,7 +67,7 @@ def patch_configuration_adv_h() -> None:
 // --------------------------------------------------------------------------
 // MAKEiT Filament Analyzer Phase 0
 // --------------------------------------------------------------------------
-// Encoder calibration, segmented motion, and evaluated single-point tests.
+// Encoder calibration, segmented motion, evaluated points, and transactions.
 #define MAKEIT_FILAMENT_ANALYZER_PHASE0
 
 // Encoder signal connected to SKR Pro filament runout / E2 DIAG area.
@@ -152,8 +152,9 @@ def patch_marlin_core() -> None:
 
 
 def patch_feature_cpp() -> None:
-    """Add the Phase-4 service call to the analyzer's existing idle path."""
+    """Patch additions that live in the previously integrated analyzer source."""
     path = "Marlin/src/feature/makeit_filament_analyzer_phase0.cpp"
+
     ensure_contains(
         path,
         'service_pulse_gap_monitor();',
@@ -163,6 +164,56 @@ def patch_feature_cpp() -> None:
             1,
         ),
     )
+
+    ensure_contains(
+        path,
+        'tp_host_abort_requested_ = false;',
+        lambda text: text.replace(
+            '  tp_abort_triggered_ = false;\n',
+            '  tp_abort_triggered_ = false;\n  tp_host_abort_requested_ = false;\n',
+            1,
+        ),
+    )
+
+    ensure_contains(
+        path,
+        'case TP_RESULT_ABORTED:',
+        lambda text: text.replace(
+            '    case TP_RESULT_LOW_FEED:     return "LOW_FEED";\n',
+            '    case TP_RESULT_LOW_FEED:     return "LOW_FEED";\n    case TP_RESULT_ABORTED:      return "ABORTED";\n',
+            1,
+        ),
+    )
+
+    ensure_contains(
+        path,
+        'else if (tp_host_abort_requested_)',
+        lambda text: text.replace(
+            '  if (!tp_temp_valid_ || tp_temp_samples_ == 0)\n    tp_result_ = TP_RESULT_INVALID_TEMP;\n  else if (tp_abort_triggered_)\n    tp_result_ = TP_RESULT_LOW_FEED;',
+            '  if (!tp_temp_valid_ || tp_temp_samples_ == 0)\n    tp_result_ = TP_RESULT_INVALID_TEMP;\n  else if (tp_host_abort_requested_)\n    tp_result_ = TP_RESULT_ABORTED;\n  else if (tp_abort_triggered_)\n    tp_result_ = TP_RESULT_LOW_FEED;',
+            1,
+        ),
+    )
+
+    ensure_contains(
+        path,
+        'SERIAL_ECHOPGM(" host_abort=");',
+        lambda text: text.replace(
+            '  SERIAL_ECHOPGM(" aborted="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);\n  SERIAL_ECHOPGM(" abort_cmd_mm=");',
+            '  SERIAL_ECHOPGM(" aborted="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);\n  SERIAL_ECHOPGM(" host_abort="); SERIAL_ECHO(tp_host_abort_requested_ ? 1 : 0);\n  SERIAL_ECHOPGM(" abort_cmd_mm=");',
+            1,
+        ),
+    )
+
+    # Add host-abort state to the compact M875 report too.
+    text = read(path)
+    compact = '  SERIAL_ECHOPGM(" abort="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);\n  SERIAL_ECHOLNPGM("");'
+    if compact in text and 'SERIAL_ECHOPGM(" host_abort=");' not in text[text.find(compact):text.find(compact) + 300]:
+        write(path, text.replace(
+            compact,
+            '  SERIAL_ECHOPGM(" abort="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);\n  SERIAL_ECHOPGM(" host_abort="); SERIAL_ECHO(tp_host_abort_requested_ ? 1 : 0);\n  SERIAL_ECHOLNPGM("");',
+            1,
+        ))
 
 
 def patch_gcode_h() -> None:
@@ -178,31 +229,17 @@ def patch_gcode_h() -> None:
             '    static void M875();\n'
             '    static void M877();\n'
             '    static void M878();\n'
+            '    static void M879();\n'
             '  #endif'
         )
         return text.replace(old, new, 1)
 
     ensure_contains(path, 'static void M875();', add_analyzer_commands)
-    ensure_contains(
-        path,
-        'static void M874();',
-        lambda text: text.replace('    static void M875();', '    static void M874();\n    static void M875();', 1),
-    )
-    ensure_contains(
-        path,
-        'static void M873();',
-        lambda text: text.replace('    static void M874();', '    static void M873();\n    static void M874();', 1),
-    )
-    ensure_contains(
-        path,
-        'static void M877();',
-        lambda text: text.replace('    static void M875();', '    static void M875();\n    static void M877();', 1),
-    )
-    ensure_contains(
-        path,
-        'static void M878();',
-        lambda text: text.replace('    static void M877();', '    static void M877();\n    static void M878();', 1),
-    )
+    ensure_contains(path, 'static void M874();', lambda text: text.replace('    static void M875();', '    static void M874();\n    static void M875();', 1))
+    ensure_contains(path, 'static void M873();', lambda text: text.replace('    static void M874();', '    static void M873();\n    static void M874();', 1))
+    ensure_contains(path, 'static void M877();', lambda text: text.replace('    static void M875();', '    static void M875();\n    static void M877();', 1))
+    ensure_contains(path, 'static void M878();', lambda text: text.replace('    static void M877();', '    static void M877();\n    static void M878();', 1))
+    ensure_contains(path, 'static void M879();', lambda text: text.replace('    static void M878();', '    static void M878();\n    static void M879();', 1))
 
     # Remove obsolete analyzer M876 declaration. Marlin owns M876 for host prompts.
     text = read(path)
@@ -223,6 +260,7 @@ def patch_gcode_cpp() -> None:
             '        case 875: M875(); break;                                  // M875: MAKEiT encoder diagnostics\n'
             '        case 877: M877(); break;                                  // M877: MAKEiT idempotent point execute\n'
             '        case 878: M878(); break;                                  // M878: MAKEiT repeatable result query\n'
+            '        case 879: M879(); break;                                  // M879: MAKEiT graceful point abort\n'
             '      #endif'
         )
         return text.replace(old, new, 1)
@@ -237,33 +275,10 @@ def patch_gcode_cpp() -> None:
             1,
         ),
     )
-    ensure_contains(
-        path,
-        'case 873: M873(); break;',
-        lambda text: text.replace(
-            '        case 874: M874(); break;',
-            '        case 873: M873(); break;                                  // M873: MAKEiT evaluated extrusion test point\n        case 874: M874(); break;',
-            1,
-        ),
-    )
-    ensure_contains(
-        path,
-        'case 877: M877(); break;',
-        lambda text: text.replace(
-            '        case 875: M875(); break;',
-            '        case 875: M875(); break;\n        case 877: M877(); break;                                  // M877: MAKEiT idempotent point execute',
-            1,
-        ),
-    )
-    ensure_contains(
-        path,
-        'case 878: M878(); break;',
-        lambda text: text.replace(
-            '        case 877: M877(); break;',
-            '        case 877: M877(); break;\n        case 878: M878(); break;                                  // M878: MAKEiT repeatable result query',
-            1,
-        ),
-    )
+    ensure_contains(path, 'case 873: M873(); break;', lambda text: text.replace('        case 874: M874(); break;', '        case 873: M873(); break;                                  // M873: MAKEiT evaluated extrusion test point\n        case 874: M874(); break;', 1))
+    ensure_contains(path, 'case 877: M877(); break;', lambda text: text.replace('        case 875: M875(); break;', '        case 875: M875(); break;\n        case 877: M877(); break;                                  // M877: MAKEiT idempotent point execute', 1))
+    ensure_contains(path, 'case 878: M878(); break;', lambda text: text.replace('        case 877: M877(); break;', '        case 877: M877(); break;\n        case 878: M878(); break;                                  // M878: MAKEiT repeatable result query', 1))
+    ensure_contains(path, 'case 879: M879(); break;', lambda text: text.replace('        case 878: M878(); break;', '        case 878: M878(); break;\n        case 879: M879(); break;                                  // M879: MAKEiT graceful point abort', 1))
 
     # Remove obsolete analyzer M876 case. Marlin owns M876 for HOST_PROMPT_SUPPORT.
     text = read(path)
@@ -279,7 +294,7 @@ def main() -> int:
     patch_feature_cpp()
     patch_gcode_h()
     patch_gcode_cpp()
-    print("Phase-0/1/2/3/4/5 analyzer integration hooks are in place.")
+    print("Phase-0/1/2/3/4/5/6 analyzer integration hooks are in place.")
     return 0
 
 
