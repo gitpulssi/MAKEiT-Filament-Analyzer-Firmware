@@ -1,10 +1,10 @@
 /**
  * MAKEiT Filament Analyzer - Phase 6 host-requested graceful abort
  *
- * M879 is handled on the normal Marlin command path. This is safe for the
- * current architecture because M877 starts a non-blocking point and returns
- * immediately, leaving the command queue available while motion is serviced
- * from idle(). This is a controlled drain stop, not a hard emergency stop.
+ * M879 J<id> is point-ID-qualified on the normal command path. A bare M879 may
+ * also be recognized by EMERGENCY_PARSER and consumed by the transaction idle
+ * service before another segment is enqueued. Both forms request the same
+ * controlled drain stop. M112 remains the hard emergency stop.
  */
 #include "../inc/MarlinConfig.h"
 
