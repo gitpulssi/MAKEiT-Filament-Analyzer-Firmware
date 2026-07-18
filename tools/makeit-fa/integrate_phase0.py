@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Integrate MAKEiT Filament Analyzer Phase-0 hooks into this Marlin tree.
+"""Integrate MAKEiT Filament Analyzer Phase-0/Phase-1 hooks into this Marlin tree.
 
 Run from the repository root:
 
     python tools/makeit-fa/integrate_phase0.py
 
-The script is idempotent. It inserts the Phase-0 hooks into the active Marlin
+The script is idempotent. It inserts the analyzer hooks into the active Marlin
 files so the firmware can build directly from this dedicated repository.
 """
 
@@ -67,7 +67,7 @@ def patch_configuration_adv_h() -> None:
 // --------------------------------------------------------------------------
 // MAKEiT Filament Analyzer Phase 0
 // --------------------------------------------------------------------------
-// First bench-test block: encoder calibration and raw one-way telemetry only.
+// Encoder calibration, raw telemetry, and segmented E-only feed diagnostics.
 #define MAKEIT_FILAMENT_ANALYZER_PHASE0
 
 // Encoder signal connected to SKR Pro filament runout / E2 DIAG area.
@@ -80,9 +80,13 @@ def patch_configuration_adv_h() -> None:
 #define MAKEIT_FA_ENCODER_INTERRUPT_MODE RISING
 #define MAKEIT_FA_ENCODER_TRIGGER_NAME   "RISING"
 
+// Polling is used for Phase 0/1 because the raw pin reads correctly while the
+// first interrupt attach test did not count on this SKR Pro setup.
+#define MAKEIT_FA_ENCODER_USE_POLLING    1
+
 // Dedicated one-way telemetry on the free TFT UART3 path.
 // Wire SKR Pro TFT TX3 -> Raspberry Pi RX2, board GND -> Pi GND.
-// Leave SKR Pro TFT RX3 / Pi TX2 disconnected for Phase 0.
+// Leave SKR Pro TFT RX3 / Pi TX2 disconnected for Phase 0/1.
 #define MAKEIT_FA_TELEM_SERIAL           Serial3
 #define MAKEIT_FA_TELEM_BAUD             250000
 #define MAKEIT_FA_TELEM_INTERVAL_MS      200
@@ -132,25 +136,51 @@ def patch_marlin_core() -> None:
 
 def patch_gcode_h() -> None:
     path = "Marlin/src/gcode/gcode.h"
+
+    def add_m875_m876(text: str) -> str:
+        old = '  #if HAS_PTC\n    static void M871();\n  #endif'
+        new = (
+            '  #if HAS_PTC\n    static void M871();\n  #endif\n\n'
+            '  #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)\n'
+            '    static void M875();\n'
+            '    static void M876();\n'
+            '  #endif'
+        )
+        return text.replace(old, new, 1)
+
+    ensure_contains(path, 'static void M875();', add_m875_m876)
+
+    # Older local checkouts may already have M875 from a previous script run.
     ensure_contains(
         path,
-        'static void M875();',
-        lambda text: text.replace(
-            '  #if HAS_PTC\n    static void M871();\n  #endif',
-            '  #if HAS_PTC\n    static void M871();\n  #endif\n\n  #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)\n    static void M875();\n  #endif',
-            1,
-        ),
+        'static void M876();',
+        lambda text: text.replace('    static void M875();', '    static void M875();\n    static void M876();', 1),
     )
 
 
 def patch_gcode_cpp() -> None:
     path = "Marlin/src/gcode/gcode.cpp"
+
+    def add_m875_m876(text: str) -> str:
+        old = '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif'
+        new = (
+            '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif\n\n'
+            '      #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)\n'
+            '        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics\n'
+            '        case 876: M876(); break;                                  // M876: MAKEiT filament analyzer segmented feed diagnostic\n'
+            '      #endif'
+        )
+        return text.replace(old, new, 1)
+
+    ensure_contains(path, 'case 875: M875(); break;', add_m875_m876)
+
+    # Older local checkouts may already have M875 from a previous script run.
     ensure_contains(
         path,
-        'case 875: M875(); break;',
+        'case 876: M876(); break;',
         lambda text: text.replace(
-            '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif',
-            '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif\n\n      #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)\n        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics\n      #endif',
+            '        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics',
+            '        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics\n        case 876: M876(); break;                                  // M876: MAKEiT filament analyzer segmented feed diagnostic',
             1,
         ),
     )
@@ -162,7 +192,7 @@ def main() -> int:
     patch_marlin_core()
     patch_gcode_h()
     patch_gcode_cpp()
-    print("Phase-0 analyzer integration hooks are in place.")
+    print("MAKEiT filament analyzer integration hooks are in place.")
     return 0
 
 
