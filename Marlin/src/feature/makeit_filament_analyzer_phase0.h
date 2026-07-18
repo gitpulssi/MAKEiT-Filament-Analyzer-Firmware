@@ -59,11 +59,6 @@ public:
   static void poll_encoder();
   static void report_to_host();
 
-  /**
-   * Start a non-blocking, open-loop segmented E-only feed diagnostic.
-   * Segments are enqueued from idle() so the watchdog and Marlin background
-   * tasks remain serviced.
-   */
   static bool run_segmented_feed_test(
     float total_mm,
     float feed_mm_min,
@@ -72,19 +67,6 @@ public:
     uint16_t report_ms
   );
 
-  /**
-   * Start one evaluated extrusion point.
-   *
-   * The hotend must already be at a non-zero target and within temp_tolerance
-   * of that target. The command resets the encoder, runs the validated
-   * segmented-motion engine, samples temperature and heater power, and reports
-   * PASS, LOW_FEED, ABORTED, INVALID_TEMP, or ERROR.
-   *
-   * When auto_stop_enabled is true, rolling encoder efficiency is checked in
-   * monitor_window_mm windows. After monitor_confirm_windows consecutive
-   * windows below monitor_efficiency_pct, the engine stops adding new segments
-   * and gracefully drains the at-most-two already committed planner blocks.
-   */
   static bool start_evaluated_test_point(
     float total_mm,
     float feed_mm_min,
@@ -100,16 +82,9 @@ public:
     uint8_t monitor_confirm_windows
   );
 
-  /**
-   * Request a controlled host abort of the active point.
-   *
-   * The request stops new segment enqueueing and drains only the bounded
-   * in-flight horizon. It returns false when no point is active or when the
-   * segmented engine is already in its terminal drain.
-   */
+  /** Stop adding segments and drain only the bounded in-flight horizon. */
   static bool request_host_abort();
 
-  /** Configure Phase-4 pulse-gap monitoring for the next/current M873 point. */
   static void configure_pulse_gap_monitor(
     bool enabled,
     float gap_factor,
@@ -122,6 +97,14 @@ public:
   static bool test_point_active() { return tp_active_; }
   static bool segmented_feed_active() { return seg_active_; }
   static bool host_abort_requested() { return tp_host_abort_requested_; }
+
+  // Stable terminal summary used to construct the transaction result CRC.
+  static bool test_point_has_result() { return tp_has_result_; }
+  static uint32_t test_point_generation() { return tp_generation_; }
+  static uint8_t test_point_result_code() { return uint8_t(tp_result_); }
+  static uint32_t test_point_actual_events() { return tp_actual_events_; }
+  static float test_point_efficiency_pct() { return tp_efficiency_pct_; }
+  static float test_point_tested_mm() { return tp_tested_mm_; }
 
 private:
   static volatile uint32_t encoder_events_;
