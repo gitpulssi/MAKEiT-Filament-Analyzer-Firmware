@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrate MAKEiT Filament Analyzer Phase-0/1/2 hooks into this Marlin tree.
+"""Integrate MAKEiT Filament Analyzer Phase-0/1/2/3/4 hooks into Marlin.
 
 Run from the repository root:
 
@@ -131,6 +131,20 @@ def patch_marlin_core() -> None:
     )
 
 
+def patch_feature_cpp() -> None:
+    """Add the Phase-4 service call to the analyzer's existing idle path."""
+    path = "Marlin/src/feature/makeit_filament_analyzer_phase0.cpp"
+    ensure_contains(
+        path,
+        'service_pulse_gap_monitor();',
+        lambda text: text.replace(
+            '  service_segmented_feed();\n  service_test_point();',
+            '  service_pulse_gap_monitor();\n  service_segmented_feed();\n  service_test_point();',
+            1,
+        ),
+    )
+
+
 def patch_gcode_h() -> None:
     path = "Marlin/src/gcode/gcode.h"
 
@@ -210,9 +224,10 @@ def main() -> int:
     patch_configuration_h()
     patch_configuration_adv_h()
     patch_marlin_core()
+    patch_feature_cpp()
     patch_gcode_h()
     patch_gcode_cpp()
-    print("Phase-0/1/2 analyzer integration hooks are in place.")
+    print("Phase-0/1/2/3/4 analyzer integration hooks are in place.")
     return 0
 
 
