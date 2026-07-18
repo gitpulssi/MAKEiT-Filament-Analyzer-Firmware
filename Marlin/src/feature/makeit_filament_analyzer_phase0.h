@@ -49,11 +49,15 @@ public:
   /**
    * Open-loop segmented E-only feed diagnostic.
    *
+   * This starts a non-blocking diagnostic. Segments are enqueued from idle()
+   * instead of from a long blocking G-code loop so the watchdog and normal
+   * Marlin background tasks remain serviced.
+   *
    * total_mm:     total forward filament length to command.
    * feed_mm_min:  filament feed rate in mm/min.
    * segment_mm:   commanded length of each E-only segment.
    * max_inflight: maximum planner blocks allowed to be queued by this test.
-   * report_ms:    telemetry/report interval while the blocking test runs.
+   * report_ms:    telemetry/report interval while the test runs.
    */
   static void run_segmented_feed_test(float total_mm, float feed_mm_min, float segment_mm, uint8_t max_inflight, uint16_t report_ms);
 
@@ -69,8 +73,22 @@ private:
   static uint32_t next_stream_ms_;
   static uint32_t seq_;
 
+  static bool seg_active_;
+  static bool seg_draining_;
+  static float seg_total_mm_;
+  static float seg_feed_mm_min_;
+  static float seg_segment_mm_;
+  static float seg_commanded_mm_;
+  static uint8_t seg_max_inflight_;
+  static uint16_t seg_report_ms_;
+  static uint32_t seg_seq_;
+  static uint32_t seg_enqueued_segments_;
+  static uint32_t seg_next_report_ms_;
+  static feedRate_t seg_old_feedrate_;
+
   static void encoder_isr();
   static void count_encoder_event();
+  static void service_segmented_feed();
   static void telemetry_line();
   static void telemetry_print_line(const uint32_t seq, const uint32_t ms, const uint32_t enc, const uint32_t edge_us, const uint8_t pin_state);
   static void segmented_feed_telemetry(const char *tag, const uint32_t seq, const float commanded_mm, const float total_mm, const uint8_t planned_blocks, const uint8_t max_inflight);
