@@ -49,6 +49,19 @@ uint32_t MakeItFilamentAnalyzerPhase0::stream_interval_ms_ = MAKEIT_FA_TELEM_INT
 uint32_t MakeItFilamentAnalyzerPhase0::next_stream_ms_ = 0;
 uint32_t MakeItFilamentAnalyzerPhase0::seq_ = 0;
 
+bool MakeItFilamentAnalyzerPhase0::seg_active_ = false;
+bool MakeItFilamentAnalyzerPhase0::seg_draining_ = false;
+float MakeItFilamentAnalyzerPhase0::seg_total_mm_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::seg_feed_mm_min_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::seg_segment_mm_ = 0.35f;
+float MakeItFilamentAnalyzerPhase0::seg_commanded_mm_ = 0.0f;
+uint8_t MakeItFilamentAnalyzerPhase0::seg_max_inflight_ = 2;
+uint16_t MakeItFilamentAnalyzerPhase0::seg_report_ms_ = 250;
+uint32_t MakeItFilamentAnalyzerPhase0::seg_seq_ = 0;
+uint32_t MakeItFilamentAnalyzerPhase0::seg_enqueued_segments_ = 0;
+uint32_t MakeItFilamentAnalyzerPhase0::seg_next_report_ms_ = 0;
+feedRate_t MakeItFilamentAnalyzerPhase0::seg_old_feedrate_ = 0.0f;
+
 MakeItFilamentAnalyzerPhase0 makeit_fa_phase0;
 
 void MakeItFilamentAnalyzerPhase0::count_encoder_event() {
@@ -175,6 +188,8 @@ void MakeItFilamentAnalyzerPhase0::idle() {
     poll_encoder();
   #endif
 
+  service_segmented_feed();
+
   if (!stream_enabled_) return;
 
   const uint32_t now = millis();
@@ -227,83 +242,88 @@ void MakeItFilamentAnalyzerPhase0::segmented_feed_telemetry(const char *tag, con
 void MakeItFilamentAnalyzerPhase0::run_segmented_feed_test(float total_mm, float feed_mm_min, float segment_mm, uint8_t max_inflight, uint16_t report_ms) {
   if (!initialized_) init();
 
+  if (seg_active_) {
+    SERIAL_ECHOLNPGM("FA1: busy");
+    return;
+  }
+
   if (total_mm <= 0.0f || feed_mm_min <= 0.0f || segment_mm <= 0.0f) {
     SERIAL_ECHOLNPGM("FA1: invalid parameters");
     return;
   }
 
-  total_mm = constrain(total_mm, 0.01f, 500.0f);
-  feed_mm_min = constrain(feed_mm_min, 1.0f, 2000.0f);
-  segment_mm = constrain(segment_mm, 0.05f, 0.35f);       // Preserve the 0.70mm cap with two blocks.
-  max_inflight = constrain(max_inflight, uint8_t(1), uint8_t(2));
-  report_ms = constrain(report_ms, uint16_t(50), uint16_t(5000));
-
-  const feedRate_t old_feedrate = feedrate_mm_s;
-  const feedRate_t test_feedrate = feed_mm_min / 60.0f;
-
-  float commanded_mm = 0.0f;
-  uint32_t local_seq = 0;
-  uint32_t enqueued_segments = 0;
-  millis_t next_report_ms = millis();
+  seg_total_mm_ = constrain(total_mm, 0.01f, 500.0f);
+  seg_feed_mm_min_ = constrain(feed_mm_min, 1.0f, 2000.0f);
+  seg_segment_mm_ = constrain(segment_mm, 0.05f, 0.35f);       // Preserve the 0.70mm cap with two blocks.
+  seg_max_inflight_ = constrain(max_inflight, uint8_t(1), uint8_t(2));
+  seg_report_ms_ = constrain(report_ms, uint16_t(50), uint16_t(5000));
+  seg_commanded_mm_ = 0.0f;
+  seg_seq_ = 0;
+  seg_enqueued_segments_ = 0;
+  seg_next_report_ms_ = millis();
+  seg_old_feedrate_ = feedrate_mm_s;
+  seg_draining_ = false;
+  seg_active_ = true;
 
   sync_plan_position_e();
 
-  segmented_feed_telemetry("start", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
+  segmented_feed_telemetry("start", ++seg_seq_, seg_commanded_mm_, seg_total_mm_, planner.movesplanned(), seg_max_inflight_);
 
-  while (commanded_mm < total_mm) {
-    idle();
+  SERIAL_ECHOPGM("FA1: started total_mm="); SERIAL_ECHO(seg_total_mm_);
+  SERIAL_ECHOPGM(" segment_mm="); SERIAL_ECHO(seg_segment_mm_);
+  SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(seg_feed_mm_min_);
+  SERIAL_ECHOPGM(" max_blocks="); SERIAL_ECHO(seg_max_inflight_);
+  SERIAL_ECHOLNPGM("");
+}
 
-    #if MAKEIT_FA_ENCODER_USE_POLLING
-      poll_encoder();
-    #endif
+void MakeItFilamentAnalyzerPhase0::service_segmented_feed() {
+  if (!seg_active_) return;
 
+  #if MAKEIT_FA_ENCODER_USE_POLLING
+    poll_encoder();
+  #endif
+
+  if (!seg_draining_ && seg_commanded_mm_ < seg_total_mm_) {
     const uint8_t planned_blocks = planner.movesplanned();
 
-    if (planned_blocks < max_inflight && !planner.is_full()) {
-      const float remaining = total_mm - commanded_mm;
-      const float this_segment = remaining < segment_mm ? remaining : segment_mm;
+    if (planned_blocks < seg_max_inflight_ && !planner.is_full()) {
+      const float remaining = seg_total_mm_ - seg_commanded_mm_;
+      const float this_segment = remaining < seg_segment_mm_ ? remaining : seg_segment_mm_;
 
       destination = current_position;
       destination.e += this_segment;
-      feedrate_mm_s = test_feedrate;
+      feedrate_mm_s = seg_feed_mm_min_ / 60.0f;
       prepare_line_to_destination();
 
-      commanded_mm += this_segment;
-      ++enqueued_segments;
-    }
-
-    const millis_t now = millis();
-    if ((int32_t)(now - next_report_ms) >= 0) {
-      next_report_ms = now + report_ms;
-      segmented_feed_telemetry("run", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
+      seg_commanded_mm_ += this_segment;
+      ++seg_enqueued_segments_;
     }
   }
 
-  while (planner.movesplanned()) {
-    idle();
+  if (seg_commanded_mm_ >= seg_total_mm_)
+    seg_draining_ = true;
 
-    #if MAKEIT_FA_ENCODER_USE_POLLING
-      poll_encoder();
-    #endif
-
-    const millis_t now = millis();
-    if ((int32_t)(now - next_report_ms) >= 0) {
-      next_report_ms = now + report_ms;
-      segmented_feed_telemetry("drain", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
-    }
+  const uint32_t now = millis();
+  if ((int32_t)(now - seg_next_report_ms_) >= 0) {
+    seg_next_report_ms_ = now + seg_report_ms_;
+    segmented_feed_telemetry(seg_draining_ ? "drain" : "run", ++seg_seq_, seg_commanded_mm_, seg_total_mm_, planner.movesplanned(), seg_max_inflight_);
   }
 
-  feedrate_mm_s = old_feedrate;
+  if (seg_draining_ && planner.movesplanned() == 0) {
+    feedrate_mm_s = seg_old_feedrate_;
+    segmented_feed_telemetry("done", ++seg_seq_, seg_commanded_mm_, seg_total_mm_, planner.movesplanned(), seg_max_inflight_);
 
-  segmented_feed_telemetry("done", ++local_seq, commanded_mm, total_mm, planner.movesplanned(), max_inflight);
+    SERIAL_ECHOPGM("FA1: done total_mm="); SERIAL_ECHO(seg_total_mm_);
+    SERIAL_ECHOPGM(" segment_mm="); SERIAL_ECHO(seg_segment_mm_);
+    SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(seg_feed_mm_min_);
+    SERIAL_ECHOPGM(" max_blocks="); SERIAL_ECHO(seg_max_inflight_);
+    SERIAL_ECHOPGM(" enqueued="); SERIAL_ECHO(seg_enqueued_segments_);
+    SERIAL_ECHOPGM(" enc="); SERIAL_ECHO(encoder_events());
+    SERIAL_ECHOLNPGM("");
 
-  SERIAL_ECHOPGM("FA1: done total_mm="); SERIAL_ECHO(total_mm);
-  SERIAL_ECHOPGM(" segment_mm="); SERIAL_ECHO(segment_mm);
-  SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(feed_mm_min);
-  SERIAL_ECHOPGM(" max_blocks="); SERIAL_ECHO(max_inflight);
-  SERIAL_ECHOPGM(" enqueued="); SERIAL_ECHO(enqueued_segments);
-  SERIAL_ECHOPGM(" enc="); SERIAL_ECHO(encoder_events());
-  SERIAL_ECHOLNPGM("");
+    seg_active_ = false;
+    seg_draining_ = false;
+  }
 }
 
 void MakeItFilamentAnalyzerPhase0::report_to_host() {
@@ -323,6 +343,7 @@ void MakeItFilamentAnalyzerPhase0::report_to_host() {
   SERIAL_ECHOPGM(" interval_ms="); SERIAL_ECHO(stream_interval_ms_);
   SERIAL_ECHOPGM(" mode="); SERIAL_ECHOPGM(MAKEIT_FA_ENCODER_TRIGGER_NAME);
   SERIAL_ECHOPGM(" poll="); SERIAL_ECHO(MAKEIT_FA_ENCODER_USE_POLLING ? 1 : 0);
+  SERIAL_ECHOPGM(" seg="); SERIAL_ECHO(seg_active_ ? 1 : 0);
   SERIAL_ECHOLNPGM("");
 }
 
