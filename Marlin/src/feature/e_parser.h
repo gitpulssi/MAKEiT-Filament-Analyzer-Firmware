@@ -9,6 +9,15 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
  */
 #pragma once
 
@@ -40,8 +49,7 @@ class EmergencyParser {
 
 public:
 
-  // Looking for M108, M112, M410, M524, M876 S[0-9], analyzer M879,
-  // and realtime S000/P000/R000 commands.
+  // Currently looking for: M108, M112, M410, M524, M876 S[0-9], S000, P000, R000
   enum State : uint8_t {
     EP_RESET,
     EP_N,
@@ -53,14 +61,8 @@ public:
     #if ENABLED(SDSUPPORT)
       EP_M5, EP_M52, EP_M524,
     #endif
-    #if EITHER(HOST_PROMPT_SUPPORT, MAKEIT_FILAMENT_ANALYZER_PHASE0)
-      EP_M8, EP_M87,
-    #endif
     #if ENABLED(HOST_PROMPT_SUPPORT)
-      EP_M876, EP_M876S, EP_M876SN,
-    #endif
-    #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)
-      EP_M879,
+      EP_M8, EP_M87, EP_M876, EP_M876S, EP_M876SN,
     #endif
     #if ENABLED(REALTIME_REPORTING_COMMANDS)
       EP_S, EP_S0, EP_S00, EP_GRBL_STATUS,
@@ -76,11 +78,6 @@ public:
 
   static bool killed_by_M112;
   static bool quickstop_by_M410;
-
-  #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)
-    // Set directly by the RX parser. The transaction idle service consumes it.
-    static bool abort_by_M879;
-  #endif
 
   #if ENABLED(SDSUPPORT)
     static bool sd_abort_by_M524;
@@ -153,23 +150,23 @@ public:
       case EP_M:
         switch (c) {
           case ' ': break;
-          case '1': state = EP_M1; break;
-          case '4': state = EP_M4; break;
+          case '1': state = EP_M1;     break;
+          case '4': state = EP_M4;     break;
           #if ENABLED(SDSUPPORT)
-            case '5': state = EP_M5; break;
+            case '5': state = EP_M5;   break;
           #endif
-          #if EITHER(HOST_PROMPT_SUPPORT, MAKEIT_FILAMENT_ANALYZER_PHASE0)
-            case '8': state = EP_M8; break;
+          #if ENABLED(HOST_PROMPT_SUPPORT)
+            case '8': state = EP_M8;     break;
           #endif
-          default: state = EP_IGNORE;
+          default: state  = EP_IGNORE;
         }
         break;
 
       case EP_M1:
         switch (c) {
-          case '0': state = EP_M10; break;
-          case '1': state = EP_M11; break;
-          default: state = EP_IGNORE;
+          case '0': state = EP_M10;    break;
+          case '1': state = EP_M11;    break;
+          default: state  = EP_IGNORE;
         }
         break;
 
@@ -183,23 +180,11 @@ public:
         case EP_M52: state = (c == '4') ? EP_M524 : EP_IGNORE; break;
       #endif
 
-      #if EITHER(HOST_PROMPT_SUPPORT, MAKEIT_FILAMENT_ANALYZER_PHASE0)
-        case EP_M8: state = (c == '7') ? EP_M87 : EP_IGNORE; break;
-
-        case EP_M87:
-          switch (c) {
-            #if ENABLED(HOST_PROMPT_SUPPORT)
-              case '6': state = EP_M876; break;
-            #endif
-            #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)
-              case '9': state = EP_M879; break;
-            #endif
-            default: state = EP_IGNORE; break;
-          }
-          break;
-      #endif
-
       #if ENABLED(HOST_PROMPT_SUPPORT)
+
+        case EP_M8:  state = (c == '7') ? EP_M87  : EP_IGNORE; break;
+        case EP_M87: state = (c == '6') ? EP_M876 : EP_IGNORE; break;
+
         case EP_M876:
           switch (c) {
             case ' ': break;
@@ -215,9 +200,9 @@ public:
               state = EP_M876SN;
               M876_reason = uint8_t(c - '0');
               break;
-            default: state = EP_IGNORE; break;
           }
           break;
+
       #endif
 
       case EP_IGNORE:
@@ -230,9 +215,6 @@ public:
             case EP_M108: wait_for_user = wait_for_heatup = false; break;
             case EP_M112: killed_by_M112 = true; break;
             case EP_M410: quickstop_by_M410 = true; break;
-            #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)
-              case EP_M879: abort_by_M879 = true; break;
-            #endif
             #if ENABLED(SDSUPPORT)
               case EP_M524: sd_abort_by_M524 = true; break;
             #endif
