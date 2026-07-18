@@ -9,6 +9,15 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
  */
 
 /**
@@ -24,9 +33,6 @@
 // Static data members
 bool EmergencyParser::killed_by_M112, // = false
      EmergencyParser::quickstop_by_M410,
-     #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)
-       EmergencyParser::abort_by_M879,
-     #endif
      #if ENABLED(SDSUPPORT)
        EmergencyParser::sd_abort_by_M524,
      #endif
