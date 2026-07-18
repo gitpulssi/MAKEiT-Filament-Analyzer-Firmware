@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrate MAKEiT Filament Analyzer Phase-0/1 hooks into this Marlin tree.
+"""Integrate MAKEiT Filament Analyzer Phase-0/1/2 hooks into this Marlin tree.
 
 Run from the repository root:
 
@@ -67,7 +67,7 @@ def patch_configuration_adv_h() -> None:
 // --------------------------------------------------------------------------
 // MAKEiT Filament Analyzer Phase 0
 // --------------------------------------------------------------------------
-// First bench-test block: encoder calibration and raw one-way telemetry only.
+// Encoder calibration, segmented motion, and evaluated single-point tests.
 #define MAKEIT_FILAMENT_ANALYZER_PHASE0
 
 // Encoder signal connected to SKR Pro filament runout / E2 DIAG area.
@@ -83,12 +83,12 @@ def patch_configuration_adv_h() -> None:
 
 // Dedicated one-way telemetry on the free TFT UART3 path.
 // Wire SKR Pro TFT TX3 -> Raspberry Pi RX2, board GND -> Pi GND.
-// Leave SKR Pro TFT RX3 / Pi TX2 disconnected for Phase 0.
+// Leave SKR Pro TFT RX3 / Pi TX2 disconnected during bring-up.
 #define MAKEIT_FA_TELEM_SERIAL           Serial3
 #define MAKEIT_FA_TELEM_BAUD             250000
 #define MAKEIT_FA_TELEM_INTERVAL_MS      200
 
-// Optional encoder ISR marker pin for logic analyzer. Leave undefined if unused.
+// Optional encoder marker pin for logic analyzer. Leave undefined if unused.
 //#define MAKEIT_FA_MARKER_ENCODER_PIN     P1_01  // PLACEHOLDER - CHANGE THIS IF USED
 '''
 
@@ -134,22 +134,28 @@ def patch_marlin_core() -> None:
 def patch_gcode_h() -> None:
     path = "Marlin/src/gcode/gcode.h"
 
-    def add_m874_m875(text: str) -> str:
+    def add_m873_m874_m875(text: str) -> str:
         old = '  #if HAS_PTC\n    static void M871();\n  #endif'
         new = (
             '  #if HAS_PTC\n    static void M871();\n  #endif\n\n'
             '  #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)\n'
+            '    static void M873();\n'
             '    static void M874();\n'
             '    static void M875();\n'
             '  #endif'
         )
         return text.replace(old, new, 1)
 
-    ensure_contains(path, 'static void M875();', add_m874_m875)
+    ensure_contains(path, 'static void M875();', add_m873_m874_m875)
     ensure_contains(
         path,
         'static void M874();',
         lambda text: text.replace('    static void M875();', '    static void M874();\n    static void M875();', 1),
+    )
+    ensure_contains(
+        path,
+        'static void M873();',
+        lambda text: text.replace('    static void M874();', '    static void M873();\n    static void M874();', 1),
     )
 
     # Remove obsolete M876 declaration from earlier diagnostic name. Marlin owns M876 for host prompts.
@@ -161,24 +167,34 @@ def patch_gcode_h() -> None:
 def patch_gcode_cpp() -> None:
     path = "Marlin/src/gcode/gcode.cpp"
 
-    def add_m874_m875(text: str) -> str:
+    def add_m873_m874_m875(text: str) -> str:
         old = '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif'
         new = (
             '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif\n\n'
             '      #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)\n'
-            '        case 874: M874(); break;                                  // M874: MAKEiT filament analyzer segmented feed diagnostic\n'
-            '        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics\n'
+            '        case 873: M873(); break;                                  // M873: MAKEiT evaluated extrusion test point\n'
+            '        case 874: M874(); break;                                  // M874: MAKEiT segmented feed diagnostic\n'
+            '        case 875: M875(); break;                                  // M875: MAKEiT encoder diagnostics\n'
             '      #endif'
         )
         return text.replace(old, new, 1)
 
-    ensure_contains(path, 'case 875: M875(); break;', add_m874_m875)
+    ensure_contains(path, 'case 875: M875(); break;', add_m873_m874_m875)
     ensure_contains(
         path,
         'case 874: M874(); break;',
         lambda text: text.replace(
             '        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics',
-            '        case 874: M874(); break;                                  // M874: MAKEiT filament analyzer segmented feed diagnostic\n        case 875: M875(); break;                                  // M875: MAKEiT filament analyzer Phase-0 diagnostics',
+            '        case 874: M874(); break;                                  // M874: MAKEiT segmented feed diagnostic\n        case 875: M875(); break;                                  // M875: MAKEiT encoder diagnostics',
+            1,
+        ),
+    )
+    ensure_contains(
+        path,
+        'case 873: M873(); break;',
+        lambda text: text.replace(
+            '        case 874: M874(); break;',
+            '        case 873: M873(); break;                                  // M873: MAKEiT evaluated extrusion test point\n        case 874: M874(); break;',
             1,
         ),
     )
@@ -196,7 +212,7 @@ def main() -> int:
     patch_marlin_core()
     patch_gcode_h()
     patch_gcode_cpp()
-    print("Phase-0/1 analyzer integration hooks are in place.")
+    print("Phase-0/1/2 analyzer integration hooks are in place.")
     return 0
 
 
