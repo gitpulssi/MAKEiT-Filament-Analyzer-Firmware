@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrate MAKEiT Filament Analyzer Phase-0/1/2/3/4 hooks into Marlin.
+"""Integrate MAKEiT Filament Analyzer Phase-0/1/2/3/4/5 hooks into Marlin.
 
 Run from the repository root:
 
@@ -110,6 +110,16 @@ def patch_marlin_core() -> None:
 
     ensure_contains(
         path,
+        'feature/makeit_fa_transaction.h',
+        lambda text: text.replace(
+            '  #include "feature/makeit_filament_analyzer_phase0.h"',
+            '  #include "feature/makeit_filament_analyzer_phase0.h"\n  #include "feature/makeit_fa_transaction.h"',
+            1,
+        ),
+    )
+
+    ensure_contains(
+        path,
         'makeit_fa_phase0.init();',
         lambda text: re.sub(
             r'(void\s+setup\s*\([^)]*\)\s*\{)',
@@ -127,6 +137,16 @@ def patch_marlin_core() -> None:
             r'\1\n  #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)\n    makeit_fa_phase0.idle();\n  #endif',
             text,
             count=1,
+        ),
+    )
+
+    ensure_contains(
+        path,
+        'makeit_fa_transaction.idle();',
+        lambda text: text.replace(
+            '    makeit_fa_phase0.idle();',
+            '    makeit_fa_phase0.idle();\n    makeit_fa_transaction.idle();',
+            1,
         ),
     )
 
@@ -148,7 +168,7 @@ def patch_feature_cpp() -> None:
 def patch_gcode_h() -> None:
     path = "Marlin/src/gcode/gcode.h"
 
-    def add_m873_m874_m875(text: str) -> str:
+    def add_analyzer_commands(text: str) -> str:
         old = '  #if HAS_PTC\n    static void M871();\n  #endif'
         new = (
             '  #if HAS_PTC\n    static void M871();\n  #endif\n\n'
@@ -156,11 +176,13 @@ def patch_gcode_h() -> None:
             '    static void M873();\n'
             '    static void M874();\n'
             '    static void M875();\n'
+            '    static void M877();\n'
+            '    static void M878();\n'
             '  #endif'
         )
         return text.replace(old, new, 1)
 
-    ensure_contains(path, 'static void M875();', add_m873_m874_m875)
+    ensure_contains(path, 'static void M875();', add_analyzer_commands)
     ensure_contains(
         path,
         'static void M874();',
@@ -171,8 +193,18 @@ def patch_gcode_h() -> None:
         'static void M873();',
         lambda text: text.replace('    static void M874();', '    static void M873();\n    static void M874();', 1),
     )
+    ensure_contains(
+        path,
+        'static void M877();',
+        lambda text: text.replace('    static void M875();', '    static void M875();\n    static void M877();', 1),
+    )
+    ensure_contains(
+        path,
+        'static void M878();',
+        lambda text: text.replace('    static void M877();', '    static void M877();\n    static void M878();', 1),
+    )
 
-    # Remove obsolete M876 declaration from earlier diagnostic name. Marlin owns M876 for host prompts.
+    # Remove obsolete analyzer M876 declaration. Marlin owns M876 for host prompts.
     text = read(path)
     if 'static void M876();' in text:
         write(path, text.replace('    static void M876();\n', ''))
@@ -181,7 +213,7 @@ def patch_gcode_h() -> None:
 def patch_gcode_cpp() -> None:
     path = "Marlin/src/gcode/gcode.cpp"
 
-    def add_m873_m874_m875(text: str) -> str:
+    def add_analyzer_commands(text: str) -> str:
         old = '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif'
         new = (
             '      #if HAS_PTC\n        case 871: M871(); break;                                  // M871: Print/reset/clear first layer temperature offset values\n      #endif\n\n'
@@ -189,11 +221,13 @@ def patch_gcode_cpp() -> None:
             '        case 873: M873(); break;                                  // M873: MAKEiT evaluated extrusion test point\n'
             '        case 874: M874(); break;                                  // M874: MAKEiT segmented feed diagnostic\n'
             '        case 875: M875(); break;                                  // M875: MAKEiT encoder diagnostics\n'
+            '        case 877: M877(); break;                                  // M877: MAKEiT idempotent point execute\n'
+            '        case 878: M878(); break;                                  // M878: MAKEiT repeatable result query\n'
             '      #endif'
         )
         return text.replace(old, new, 1)
 
-    ensure_contains(path, 'case 875: M875(); break;', add_m873_m874_m875)
+    ensure_contains(path, 'case 875: M875(); break;', add_analyzer_commands)
     ensure_contains(
         path,
         'case 874: M874(); break;',
@@ -212,8 +246,26 @@ def patch_gcode_cpp() -> None:
             1,
         ),
     )
+    ensure_contains(
+        path,
+        'case 877: M877(); break;',
+        lambda text: text.replace(
+            '        case 875: M875(); break;',
+            '        case 875: M875(); break;\n        case 877: M877(); break;                                  // M877: MAKEiT idempotent point execute',
+            1,
+        ),
+    )
+    ensure_contains(
+        path,
+        'case 878: M878(); break;',
+        lambda text: text.replace(
+            '        case 877: M877(); break;',
+            '        case 877: M877(); break;\n        case 878: M878(); break;                                  // M878: MAKEiT repeatable result query',
+            1,
+        ),
+    )
 
-    # Remove obsolete M876 case from earlier diagnostic name. Marlin owns M876 for HOST_PROMPT_SUPPORT.
+    # Remove obsolete analyzer M876 case. Marlin owns M876 for HOST_PROMPT_SUPPORT.
     text = read(path)
     obsolete = '        case 876: M876(); break;                                  // M876: MAKEiT filament analyzer segmented feed diagnostic\n'
     if obsolete in text:
@@ -227,7 +279,7 @@ def main() -> int:
     patch_feature_cpp()
     patch_gcode_h()
     patch_gcode_cpp()
-    print("Phase-0/1/2/3/4 analyzer integration hooks are in place.")
+    print("Phase-0/1/2/3/4/5 analyzer integration hooks are in place.")
     return 0
 
 
