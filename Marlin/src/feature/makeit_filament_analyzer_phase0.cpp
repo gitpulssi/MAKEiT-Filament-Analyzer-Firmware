@@ -1,5 +1,5 @@
 /**
- * MAKEiT Filament Analyzer - Phase 0 / Phase 1 / Phase 2 bring-up
+ * MAKEiT Filament Analyzer - Phase 0 / 1 / 2 / 3 bring-up
  */
 #include "../inc/MarlinConfig.h"
 
@@ -72,6 +72,7 @@ uint32_t MakeItFilamentAnalyzerPhase0::tp_started_ms_ = 0;
 uint32_t MakeItFilamentAnalyzerPhase0::tp_finished_ms_ = 0;
 uint32_t MakeItFilamentAnalyzerPhase0::tp_next_sample_ms_ = 0;
 float MakeItFilamentAnalyzerPhase0::tp_total_mm_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::tp_tested_mm_ = 0.0f;
 float MakeItFilamentAnalyzerPhase0::tp_feed_mm_min_ = 0.0f;
 float MakeItFilamentAnalyzerPhase0::tp_encoder_events_per_mm_ = 0.685f;
 float MakeItFilamentAnalyzerPhase0::tp_pass_efficiency_pct_ = 95.0f;
@@ -86,6 +87,17 @@ uint32_t MakeItFilamentAnalyzerPhase0::tp_heater_samples_ = 0;
 float MakeItFilamentAnalyzerPhase0::tp_expected_events_ = 0.0f;
 uint32_t MakeItFilamentAnalyzerPhase0::tp_actual_events_ = 0;
 float MakeItFilamentAnalyzerPhase0::tp_efficiency_pct_ = 0.0f;
+
+bool MakeItFilamentAnalyzerPhase0::tp_auto_stop_enabled_ = false;
+bool MakeItFilamentAnalyzerPhase0::tp_abort_triggered_ = false;
+float MakeItFilamentAnalyzerPhase0::tp_monitor_window_mm_ = 20.0f;
+float MakeItFilamentAnalyzerPhase0::tp_monitor_efficiency_pct_ = 85.0f;
+uint8_t MakeItFilamentAnalyzerPhase0::tp_monitor_confirm_windows_ = 2;
+uint8_t MakeItFilamentAnalyzerPhase0::tp_monitor_failed_windows_ = 0;
+float MakeItFilamentAnalyzerPhase0::tp_monitor_last_completed_mm_ = 0.0f;
+uint32_t MakeItFilamentAnalyzerPhase0::tp_monitor_last_events_ = 0;
+float MakeItFilamentAnalyzerPhase0::tp_monitor_last_efficiency_pct_ = 0.0f;
+float MakeItFilamentAnalyzerPhase0::tp_abort_commanded_mm_ = 0.0f;
 
 MakeItFilamentAnalyzerPhase0 makeit_fa_phase0;
 
@@ -144,7 +156,6 @@ void MakeItFilamentAnalyzerPhase0::poll_encoder() {
   #elif MAKEIT_FA_ENCODER_INTERRUPT_MODE == FALLING
     should_count = (last_pin_state_ && !current);
   #else
-    // Unknown mode: count every transition for diagnostics.
     should_count = true;
   #endif
 
@@ -163,8 +174,6 @@ void MakeItFilamentAnalyzerPhase0::reset_encoder() {
   last_edge_us_ = micros();
   CRITICAL_SECTION_END();
 
-  // Reset the software edge detector to the current physical pin state so
-  // the next count represents a real new edge, not the state at reset time.
   last_pin_state_ = !!encoder_pin_state();
   poll_initialized_ = true;
   seq_ = 0;
@@ -283,7 +292,7 @@ bool MakeItFilamentAnalyzerPhase0::run_segmented_feed_test(float total_mm, float
 
   seg_total_mm_ = constrain(total_mm, 0.01f, 500.0f);
   seg_feed_mm_min_ = constrain(feed_mm_min, 1.0f, 2000.0f);
-  seg_segment_mm_ = constrain(segment_mm, 0.05f, 0.35f);       // Preserve the 0.70mm cap with two blocks.
+  seg_segment_mm_ = constrain(segment_mm, 0.05f, 0.35f);
   seg_max_inflight_ = constrain(max_inflight, uint8_t(1), uint8_t(2));
   seg_report_ms_ = constrain(report_ms, uint16_t(50), uint16_t(5000));
   seg_commanded_mm_ = 0.0f;
@@ -304,6 +313,22 @@ bool MakeItFilamentAnalyzerPhase0::run_segmented_feed_test(float total_mm, float
   SERIAL_ECHOPGM(" max_blocks="); SERIAL_ECHO(seg_max_inflight_);
   SERIAL_ECHOLNPGM("");
   return true;
+}
+
+float MakeItFilamentAnalyzerPhase0::estimated_completed_mm() {
+  float completed = seg_commanded_mm_ - float(planner.movesplanned()) * seg_segment_mm_;
+  if (completed < 0.0f) completed = 0.0f;
+  if (completed > seg_commanded_mm_) completed = seg_commanded_mm_;
+  return completed;
+}
+
+void MakeItFilamentAnalyzerPhase0::request_segmented_stop() {
+  if (!seg_active_ || seg_draining_) return;
+
+  // Stop adding new segments. Any already committed blocks, at most two by
+  // construction, are allowed to drain normally so position remains known.
+  seg_total_mm_ = seg_commanded_mm_;
+  seg_draining_ = true;
 }
 
 void MakeItFilamentAnalyzerPhase0::service_segmented_feed() {
@@ -364,7 +389,11 @@ bool MakeItFilamentAnalyzerPhase0::start_evaluated_test_point(
   uint16_t report_ms,
   float encoder_events_per_mm,
   float pass_efficiency_pct,
-  float temp_tolerance
+  float temp_tolerance,
+  bool auto_stop_enabled,
+  float monitor_window_mm,
+  float monitor_efficiency_pct,
+  uint8_t monitor_confirm_windows
 ) {
   if (!initialized_) init();
 
@@ -381,6 +410,9 @@ bool MakeItFilamentAnalyzerPhase0::start_evaluated_test_point(
   encoder_events_per_mm = constrain(encoder_events_per_mm, 0.01f, 100.0f);
   pass_efficiency_pct = constrain(pass_efficiency_pct, 50.0f, 105.0f);
   temp_tolerance = constrain(temp_tolerance, 0.5f, 15.0f);
+  monitor_window_mm = constrain(monitor_window_mm, 5.0f, 100.0f);
+  monitor_efficiency_pct = constrain(monitor_efficiency_pct, 50.0f, 105.0f);
+  monitor_confirm_windows = constrain(monitor_confirm_windows, uint8_t(1), uint8_t(5));
 
   const float current_temp = thermalManager.degHotend(0);
   const float target_temp = thermalManager.degTargetHotend(0);
@@ -389,6 +421,7 @@ bool MakeItFilamentAnalyzerPhase0::start_evaluated_test_point(
   tp_has_result_ = false;
   tp_result_ = TP_RESULT_NONE;
   tp_total_mm_ = total_mm;
+  tp_tested_mm_ = 0.0f;
   tp_feed_mm_min_ = feed_mm_min;
   tp_encoder_events_per_mm_ = encoder_events_per_mm;
   tp_pass_efficiency_pct_ = pass_efficiency_pct;
@@ -406,6 +439,17 @@ bool MakeItFilamentAnalyzerPhase0::start_evaluated_test_point(
   tp_heater_sum_ = 0;
   tp_heater_samples_ = 0;
   tp_temp_valid_ = true;
+
+  tp_auto_stop_enabled_ = auto_stop_enabled;
+  tp_abort_triggered_ = false;
+  tp_monitor_window_mm_ = monitor_window_mm;
+  tp_monitor_efficiency_pct_ = monitor_efficiency_pct;
+  tp_monitor_confirm_windows_ = monitor_confirm_windows;
+  tp_monitor_failed_windows_ = 0;
+  tp_monitor_last_completed_mm_ = 0.0f;
+  tp_monitor_last_events_ = 0;
+  tp_monitor_last_efficiency_pct_ = 0.0f;
+  tp_abort_commanded_mm_ = 0.0f;
 
   if (target_temp <= 0.0f || !thermalManager.hotEnoughToExtrude(0)) {
     tp_result_ = TP_RESULT_ERROR;
@@ -453,6 +497,10 @@ bool MakeItFilamentAnalyzerPhase0::start_evaluated_test_point(
   SERIAL_ECHOPGM(" pass_pct="); SERIAL_ECHO(tp_pass_efficiency_pct_);
   SERIAL_ECHOPGM(" temp_target="); SERIAL_ECHO(tp_temp_target_);
   SERIAL_ECHOPGM(" temp_tol="); SERIAL_ECHO(tp_temp_tolerance_);
+  SERIAL_ECHOPGM(" auto_stop="); SERIAL_ECHO(tp_auto_stop_enabled_ ? 1 : 0);
+  SERIAL_ECHOPGM(" window_mm="); SERIAL_ECHO(tp_monitor_window_mm_);
+  SERIAL_ECHOPGM(" monitor_pct="); SERIAL_ECHO(tp_monitor_efficiency_pct_);
+  SERIAL_ECHOPGM(" confirm="); SERIAL_ECHO(tp_monitor_confirm_windows_);
   SERIAL_ECHOLNPGM("");
   return true;
 }
@@ -480,6 +528,56 @@ void MakeItFilamentAnalyzerPhase0::sample_test_point() {
     tp_temp_valid_ = false;
 }
 
+void MakeItFilamentAnalyzerPhase0::monitor_test_point_feed() {
+  if (!tp_auto_stop_enabled_ || tp_abort_triggered_ || !seg_active_ || seg_draining_)
+    return;
+
+  const float completed_mm = estimated_completed_mm();
+  const float window_mm = completed_mm - tp_monitor_last_completed_mm_;
+  if (window_mm < tp_monitor_window_mm_)
+    return;
+
+  const uint32_t events_now = encoder_events();
+  const uint32_t window_events = events_now - tp_monitor_last_events_;
+  const float expected_events = window_mm * tp_encoder_events_per_mm_;
+  const float efficiency_pct = expected_events > 0.0f
+    ? float(window_events) * 100.0f / expected_events
+    : 0.0f;
+
+  tp_monitor_last_efficiency_pct_ = efficiency_pct;
+
+  if (efficiency_pct < tp_monitor_efficiency_pct_)
+    ++tp_monitor_failed_windows_;
+  else
+    tp_monitor_failed_windows_ = 0;
+
+  SERIAL_ECHOPGM("FA3: window gen="); SERIAL_ECHO(tp_generation_);
+  SERIAL_ECHOPGM(" from_mm="); SERIAL_ECHO(tp_monitor_last_completed_mm_);
+  SERIAL_ECHOPGM(" to_mm="); SERIAL_ECHO(completed_mm);
+  SERIAL_ECHOPGM(" actual_enc="); SERIAL_ECHO(window_events);
+  SERIAL_ECHOPGM(" expected_enc="); SERIAL_ECHO(expected_events);
+  SERIAL_ECHOPGM(" efficiency_pct="); SERIAL_ECHO(efficiency_pct);
+  SERIAL_ECHOPGM(" threshold_pct="); SERIAL_ECHO(tp_monitor_efficiency_pct_);
+  SERIAL_ECHOPGM(" failed_windows="); SERIAL_ECHO(tp_monitor_failed_windows_);
+  SERIAL_ECHOPGM(" confirm="); SERIAL_ECHO(tp_monitor_confirm_windows_);
+  SERIAL_ECHOLNPGM("");
+
+  tp_monitor_last_completed_mm_ = completed_mm;
+  tp_monitor_last_events_ = events_now;
+
+  if (tp_monitor_failed_windows_ >= tp_monitor_confirm_windows_) {
+    tp_abort_triggered_ = true;
+    tp_abort_commanded_mm_ = seg_commanded_mm_;
+    request_segmented_stop();
+
+    SERIAL_ECHOPGM("FA3: stop_requested gen="); SERIAL_ECHO(tp_generation_);
+    SERIAL_ECHOPGM(" cmd_mm="); SERIAL_ECHO(tp_abort_commanded_mm_);
+    SERIAL_ECHOPGM(" last_efficiency_pct="); SERIAL_ECHO(tp_monitor_last_efficiency_pct_);
+    SERIAL_ECHOPGM(" failed_windows="); SERIAL_ECHO(tp_monitor_failed_windows_);
+    SERIAL_ECHOLNPGM("");
+  }
+}
+
 void MakeItFilamentAnalyzerPhase0::service_test_point() {
   if (!tp_active_) return;
 
@@ -488,6 +586,8 @@ void MakeItFilamentAnalyzerPhase0::service_test_point() {
     tp_next_sample_ms_ = now + 100UL;
     sample_test_point();
   }
+
+  monitor_test_point_feed();
 
   if (!seg_active_)
     finish_test_point();
@@ -506,13 +606,17 @@ const char* MakeItFilamentAnalyzerPhase0::test_point_result_name(const TestPoint
 void MakeItFilamentAnalyzerPhase0::finish_test_point() {
   sample_test_point();
 
+  tp_tested_mm_ = tp_abort_triggered_ ? seg_commanded_mm_ : tp_total_mm_;
+  tp_expected_events_ = tp_tested_mm_ * tp_encoder_events_per_mm_;
   tp_actual_events_ = encoder_events();
   tp_efficiency_pct_ = tp_expected_events_ > 0.0f
-    ? (float(tp_actual_events_) * 100.0f / tp_expected_events_)
+    ? float(tp_actual_events_) * 100.0f / tp_expected_events_
     : 0.0f;
 
   if (!tp_temp_valid_ || tp_temp_samples_ == 0)
     tp_result_ = TP_RESULT_INVALID_TEMP;
+  else if (tp_abort_triggered_)
+    tp_result_ = TP_RESULT_LOW_FEED;
   else if (tp_efficiency_pct_ >= tp_pass_efficiency_pct_)
     tp_result_ = TP_RESULT_PASS;
   else
@@ -528,12 +632,16 @@ void MakeItFilamentAnalyzerPhase0::report_test_point() {
   if (tp_active_) {
     SERIAL_ECHOPGM("FA2: state=RUNNING gen="); SERIAL_ECHO(tp_generation_);
     SERIAL_ECHOPGM(" cmd_mm="); SERIAL_ECHO(seg_commanded_mm_);
+    SERIAL_ECHOPGM(" completed_est_mm="); SERIAL_ECHO(estimated_completed_mm());
     SERIAL_ECHOPGM(" total_mm="); SERIAL_ECHO(tp_total_mm_);
     SERIAL_ECHOPGM(" enc="); SERIAL_ECHO(encoder_events());
     SERIAL_ECHOPGM(" expected_enc="); SERIAL_ECHO(tp_expected_events_);
     SERIAL_ECHOPGM(" temp="); SERIAL_ECHO(thermalManager.degHotend(0));
     SERIAL_ECHOPGM(" target="); SERIAL_ECHO(tp_temp_target_);
     SERIAL_ECHOPGM(" heater="); SERIAL_ECHO(thermalManager.getHeaterPower(H_E0));
+    SERIAL_ECHOPGM(" auto_stop="); SERIAL_ECHO(tp_auto_stop_enabled_ ? 1 : 0);
+    SERIAL_ECHOPGM(" failed_windows="); SERIAL_ECHO(tp_monitor_failed_windows_);
+    SERIAL_ECHOPGM(" last_window_eff="); SERIAL_ECHO(tp_monitor_last_efficiency_pct_);
     SERIAL_ECHOLNPGM("");
     return;
   }
@@ -549,7 +657,8 @@ void MakeItFilamentAnalyzerPhase0::report_test_point() {
   SERIAL_ECHOPGM("FA2: result=", test_point_result_name(tp_result_));
   SERIAL_ECHOPGM(" gen="); SERIAL_ECHO(tp_generation_);
   SERIAL_ECHOPGM(" duration_ms="); SERIAL_ECHO(tp_finished_ms_ - tp_started_ms_);
-  SERIAL_ECHOPGM(" total_mm="); SERIAL_ECHO(tp_total_mm_);
+  SERIAL_ECHOPGM(" requested_mm="); SERIAL_ECHO(tp_total_mm_);
+  SERIAL_ECHOPGM(" tested_mm="); SERIAL_ECHO(tp_tested_mm_);
   SERIAL_ECHOPGM(" feed_mm_min="); SERIAL_ECHO(tp_feed_mm_min_);
   SERIAL_ECHOPGM(" expected_enc="); SERIAL_ECHO(tp_expected_events_);
   SERIAL_ECHOPGM(" actual_enc="); SERIAL_ECHO(tp_actual_events_);
@@ -560,6 +669,13 @@ void MakeItFilamentAnalyzerPhase0::report_test_point() {
   SERIAL_ECHOPGM(" temp_min="); SERIAL_ECHO(tp_temp_min_);
   SERIAL_ECHOPGM(" temp_max="); SERIAL_ECHO(tp_temp_max_);
   SERIAL_ECHOPGM(" heater_avg_raw="); SERIAL_ECHO(heater_avg);
+  SERIAL_ECHOPGM(" auto_stop="); SERIAL_ECHO(tp_auto_stop_enabled_ ? 1 : 0);
+  SERIAL_ECHOPGM(" aborted="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);
+  SERIAL_ECHOPGM(" abort_cmd_mm="); SERIAL_ECHO(tp_abort_commanded_mm_);
+  SERIAL_ECHOPGM(" monitor_window_mm="); SERIAL_ECHO(tp_monitor_window_mm_);
+  SERIAL_ECHOPGM(" monitor_pct="); SERIAL_ECHO(tp_monitor_efficiency_pct_);
+  SERIAL_ECHOPGM(" monitor_last_eff="); SERIAL_ECHO(tp_monitor_last_efficiency_pct_);
+  SERIAL_ECHOPGM(" failed_windows="); SERIAL_ECHO(tp_monitor_failed_windows_);
   SERIAL_ECHOLNPGM("");
 }
 
@@ -582,6 +698,7 @@ void MakeItFilamentAnalyzerPhase0::report_to_host() {
   SERIAL_ECHOPGM(" poll="); SERIAL_ECHO(MAKEIT_FA_ENCODER_USE_POLLING ? 1 : 0);
   SERIAL_ECHOPGM(" seg="); SERIAL_ECHO(seg_active_ ? 1 : 0);
   SERIAL_ECHOPGM(" tp="); SERIAL_ECHO(tp_active_ ? 1 : 0);
+  SERIAL_ECHOPGM(" abort="); SERIAL_ECHO(tp_abort_triggered_ ? 1 : 0);
   SERIAL_ECHOLNPGM("");
 }
 
