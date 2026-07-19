@@ -1,9 +1,8 @@
 /**
- * MAKEiT Filament Analyzer - Phase 8 temperature / speed envelope
+ * MAKEiT Filament Analyzer - Phase 8/9 temperature / speed envelope
  *
- * Orchestrates one validated Phase-7 speed campaign at each temperature in an
- * ascending ladder. Completed temperature rows are retained in RAM and exposed
- * through a side-effect-free query.
+ * Phase 9 adds a validated recovery / re-prime step so an envelope can continue
+ * to hotter rows after a real low-temperature feed limit.
  */
 #pragma once
 
@@ -19,6 +18,7 @@ struct MakeItFATemperatureEnvelopeParams {
   float max_temp_c;
   float temp_step_c;
   float filament_diameter_mm;
+  float recovery_temp_c;          // 0 disables recovery; otherwise normally max_temp_c.
   MakeItFASpeedCampaignParams speed;
 };
 
@@ -29,8 +29,10 @@ public:
   enum State : uint8_t {
     ENV_EMPTY = 0,
     ENV_RUNNING_ROW,
+    ENV_RECOVERING,
     ENV_COMPLETE,
     ENV_LIMIT_FOUND,
+    ENV_RECOVERY_FAILED,
     ENV_INVALID_TEMP,
     ENV_ABORTED,
     ENV_ERROR
@@ -42,22 +44,20 @@ public:
     float first_fail_feed_mm_min;
     uint32_t row_campaign_id;
     uint32_t last_point_crc;
+    uint32_t recovery_id;
+    uint32_t recovery_crc;
     uint8_t campaign_state;
     uint8_t last_point_result_code;
+    bool recovery_attempted;
+    bool recovery_passed;
   };
 
   static void idle();
-
-  /** Start an idempotent ascending temperature ladder. */
   static bool start(uint32_t envelope_id, const MakeItFATemperatureEnvelopeParams &params);
-
-  /** Side-effect-free current/latest envelope query. */
   static void query(bool has_envelope_id, uint32_t envelope_id);
-
-  /** Cancel while a row waits for temperature or gracefully abort its point. */
   static bool cancel(bool has_envelope_id, uint32_t envelope_id);
 
-  static bool active() { return state_ == ENV_RUNNING_ROW; }
+  static bool active() { return state_ == ENV_RUNNING_ROW || state_ == ENV_RECOVERING; }
   static bool has_record() { return record_valid_; }
   static State state() { return state_; }
   static uint32_t result_crc() { return result_crc_; }
@@ -71,8 +71,10 @@ private:
   static uint32_t started_ms_;
   static uint32_t finished_ms_;
   static uint32_t current_row_campaign_id_;
+  static uint32_t current_recovery_id_;
   static uint32_t result_crc_;
   static uint16_t speed_points_per_row_;
+  static uint16_t row_id_stride_;
   static uint8_t row_index_;
   static uint8_t row_count_;
   static uint8_t completed_rows_;
@@ -92,7 +94,9 @@ private:
   static float feed_to_q_mm3_s(float feed_mm_min, float diameter_mm);
   static void normalize_speed_params(MakeItFASpeedCampaignParams &params);
   static bool start_current_row();
+  static bool start_recovery_for_next_row();
   static void handle_row_result();
+  static void handle_recovery_result();
   static void emit_row(uint8_t row);
   static void report(const char *tag, bool include_rows=false);
   static void finish(State terminal_state, const char *tag);
