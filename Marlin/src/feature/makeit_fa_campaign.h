@@ -55,6 +55,25 @@ public:
     return state_ == CAM_WAIT_TEMP || state_ == CAM_RUNNING_POINT;
   }
 
+  // Read-only summary access for the Phase-8 temperature-envelope controller.
+  static bool has_record() { return record_valid_; }
+  static bool terminal() {
+    return state_ == CAM_COMPLETE || state_ == CAM_LIMIT_FOUND
+        || state_ == CAM_INVALID_TEMP || state_ == CAM_ABORTED
+        || state_ == CAM_ERROR;
+  }
+  static State state() { return state_; }
+  static uint32_t current_campaign_id() { return campaign_id_; }
+  static uint32_t current_params_hash() { return params_hash_; }
+  static uint16_t point_count() { return point_count_; }
+  static uint32_t current_point_id() { return current_point_id_; }
+  static float target_temp() { return target_temp_; }
+  static float current_feed_mm_min() { return current_feed_mm_min_; }
+  static float last_pass_feed_mm_min() { return last_pass_feed_mm_min_; }
+  static float first_fail_feed_mm_min() { return first_fail_feed_mm_min_; }
+  static uint8_t last_point_result_code() { return last_point_result_code_; }
+  static uint32_t last_point_result_crc() { return last_point_result_crc_; }
+
 private:
   static State state_;
   static bool record_valid_;
