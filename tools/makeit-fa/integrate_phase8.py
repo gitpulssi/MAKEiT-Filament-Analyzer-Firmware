@@ -8,6 +8,14 @@ import re
 
 ROOT = Path(__file__).resolve().parents[2]
 
+ANALYZER_IDLE_SERVICES = (
+    "transaction",
+    "phase0",
+    "recovery",
+    "campaign",
+    "envelope",
+)
+
 
 def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8", errors="surrogateescape")
@@ -27,6 +35,54 @@ def ensure_contains(path: str, needle: str, edit) -> None:
     if new_text == text:
         raise RuntimeError(f"failed to patch {path}; pattern not found for {needle!r}")
     write(path, new_text)
+
+
+def normalize_analyzer_idle_order(
+    path: str,
+    required_services: tuple[str, ...],
+    phase_name: str,
+) -> None:
+    """Normalize installed analyzer services while retaining later-phase services."""
+    text = read(path)
+    names = "|".join(re.escape(name) for name in ANALYZER_IDLE_SERVICES)
+    block_pattern = re.compile(
+        rf"(?m)(?:^(?P<indent>[ \t]*)makeit_fa_(?:{names})\.idle\(\);[ \t]*(?:\r?\n|$))+"
+    )
+
+    for match in block_pattern.finditer(text):
+        block = match.group(0)
+        if not all(f"makeit_fa_{name}.idle();" in block for name in required_services):
+            continue
+
+        first_line = block.splitlines()[0]
+        indent_match = re.match(r"([ \t]*)", first_line)
+        indent = indent_match.group(1) if indent_match else "    "
+        newline = "\r\n" if "\r\n" in block else "\n"
+        present = [
+            name
+            for name in ANALYZER_IDLE_SERVICES
+            if f"makeit_fa_{name}.idle();" in block
+        ]
+        canonical = "".join(
+            f"{indent}makeit_fa_{name}.idle();{newline}" for name in present
+        )
+        new_text = text[: match.start()] + canonical + text[match.end() :]
+
+        if new_text != text:
+            write(path, new_text)
+        else:
+            print(
+                f"ok {path}: {phase_name} idle order is canonical "
+                f"with services {', '.join(present)}"
+            )
+        return
+
+    positions = [text.find(f"makeit_fa_{name}.idle();") for name in required_services]
+    if all(position >= 0 for position in positions) and positions == sorted(positions):
+        print(f"ok {path}: {phase_name} required idle order is preserved in expanded tree")
+        return
+
+    raise RuntimeError(f"failed to normalize {phase_name} idle service order")
 
 
 def patch_marlin_core() -> None:
@@ -54,25 +110,11 @@ def patch_marlin_core() -> None:
         ),
     )
 
-    # Emergency transaction handling first, then motion/evaluation, then the
-    # fixed-temperature campaign, and finally the outer temperature envelope.
-    text = read(path)
-    pattern = re.compile(
-        r"(?:    makeit_fa_(?:transaction|phase0|campaign|envelope)\.idle\(\);\n){4}"
+    normalize_analyzer_idle_order(
+        path,
+        ("transaction", "phase0", "campaign", "envelope"),
+        "Phase-8",
     )
-    canonical = (
-        "    makeit_fa_transaction.idle();\n"
-        "    makeit_fa_phase0.idle();\n"
-        "    makeit_fa_campaign.idle();\n"
-        "    makeit_fa_envelope.idle();\n"
-    )
-    new_text, count = pattern.subn(canonical, text, count=1)
-    if count and new_text != text:
-        write(path, new_text)
-    elif canonical in text:
-        print(f"ok {path}: Phase-8 idle order is canonical")
-    else:
-        raise RuntimeError("failed to normalize Phase-8 idle service order")
 
 
 def patch_gcode_h() -> None:
