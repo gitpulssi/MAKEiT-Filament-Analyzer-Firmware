@@ -259,7 +259,7 @@ void MakeItFASpeedCampaign::handle_conditioning_result() {
     )
     ensure(
         path,
-        "  conditioning_started_ms_ = 0;",
+        "  first_fail_feed_mm_min_ = 0.0f;\n  conditioning_started_ms_ = 0;",
         "  last_pass_feed_mm_min_ = 0.0f;\n"
         "  first_fail_feed_mm_min_ = 0.0f;\n"
         "  last_point_result_code_ = 0;",
@@ -349,6 +349,13 @@ def patch_envelope_source() -> None:
         "  p.conditioning_mm = p.conditioning_mm <= 0.0f\n"
         "    ? 0.0f : constrain(p.conditioning_mm, 10.0f, 100.0f);\n"
         "  p.point.total_mm",
+    )
+    ensure(
+        path,
+        'SERIAL_ECHOPGM(" conditioning_mm="); SERIAL_ECHO(params_.speed.conditioning_mm);',
+        '  SERIAL_ECHOPGM(" speed_points="); SERIAL_ECHO(speed_points_per_row_);',
+        '  SERIAL_ECHOPGM(" speed_points="); SERIAL_ECHO(speed_points_per_row_);\n'
+        '  SERIAL_ECHOPGM(" conditioning_mm="); SERIAL_ECHO(params_.speed.conditioning_mm);',
     )
 
 
