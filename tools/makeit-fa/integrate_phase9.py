@@ -89,13 +89,19 @@ def patch_marlin_core() -> None:
 
 def patch_gcode_h() -> None:
     path = "Marlin/src/gcode/gcode.h"
+    text = read(path)
+    obsolete = "    static void M869();\n    static void M870();"
+    if obsolete in text:
+        text = text.replace(obsolete, "    static void M870();", 1)
+        write(path, text)
+
     ensure_contains(
         path,
-        "static void M869();",
-        lambda text: text.replace(
-            "    static void M870();",
-            "    static void M869();\n"
-            "    static void M870();",
+        "static void M880();",
+        lambda current: current.replace(
+            "    static void M879();",
+            "    static void M879();\n"
+            "    static void M880();",
             1,
         ),
     )
@@ -103,13 +109,18 @@ def patch_gcode_h() -> None:
 
 def patch_gcode_cpp() -> None:
     path = "Marlin/src/gcode/gcode.cpp"
+    text = read(path)
+    obsolete = "        case 869: M869(); break;                                  // M869: MAKEiT recovery / re-prime\n"
+    if obsolete in text:
+        write(path, text.replace(obsolete, "", 1))
+
     ensure_contains(
         path,
-        "case 869: M869(); break;",
-        lambda text: text.replace(
-            "        case 870: M870(); break;",
-            "        case 869: M869(); break;                                  // M869: MAKEiT recovery / re-prime\n"
-            "        case 870: M870(); break;",
+        "case 880: M880(); break;",
+        lambda current: current.replace(
+            "        case 879: M879(); break;",
+            "        case 879: M879(); break;\n"
+            "        case 880: M880(); break;                                  // M880: MAKEiT recovery / re-prime",
             1,
         ),
     )
@@ -118,6 +129,7 @@ def patch_gcode_cpp() -> None:
 def verify_phase9_sources() -> None:
     required = {
         "Marlin/src/gcode/feature/M870.cpp": "recovery_temp_c",
+        "Marlin/src/gcode/feature/M880.cpp": "GcodeSuite::M880",
         "Marlin/src/feature/makeit_fa_envelope.cpp": "ENV_RECOVERING",
         "Marlin/src/feature/makeit_fa_recovery.cpp": "FA9: tag=",
     }
