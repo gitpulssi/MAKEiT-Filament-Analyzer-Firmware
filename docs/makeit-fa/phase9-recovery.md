@@ -89,10 +89,10 @@ Set and stabilize the first row:
 M109 S190
 ```
 
-Then run a 5 °C temperature ladder with a conservative 2–12 mm³/s speed ladder:
+Then run a 5 °C temperature ladder with a coarse 2–22 mm³/s speed ladder:
 
 ```gcode
-M870 J2000 T230 E5 M230 Y1.75 F50 U300 V50 O10 \
+M870 J2000 T230 E5 M230 Y1.75 F50 U550 V100 O10 \
      L40 S0.35 B2 I250 C0.685 P95 D5 A1 W20 R85 K2 G4 H500 X2
 ```
 
@@ -105,24 +105,25 @@ Temperature rows:
 Feed speeds:
 
 ```text
-50, 100, 150, 200, 250, 300 mm/min
+50, 150, 250, 350, 450, 550 mm/min
 ```
 
 For 1.75 mm filament these correspond approximately to:
 
 ```text
 F50  =  2.00 mm³/s
-F100 =  4.01 mm³/s
 F150 =  6.01 mm³/s
-F200 =  8.02 mm³/s
 F250 = 10.02 mm³/s
-F300 = 12.03 mm³/s
+F350 = 14.03 mm³/s
+F450 = 18.04 mm³/s
+F550 = 22.05 mm³/s
 ```
 
 This first full-range scan uses at most 54 evaluated speed points and 2.16 m of
 commanded test filament (`9 rows × 6 points × 40 mm`), plus recovery purge and
-validation only after rows that actually find a limit. A later scan can extend
-`U` to 400 or 500 mm/min after the recovery path and 190–230 °C map are proven.
+validation only after rows that actually find a limit. After the coarse map is
+complete, repeat only the interesting brackets with `V25` or `V50` to refine the
+flow ceiling without repeating the whole temperature range.
 
 ## Point-ID allocation
 
