@@ -33,12 +33,13 @@ If validation fails, the envelope terminates as `RECOVERY_FAILED`. This covers a
 fouled hob, persistent clog, broken encoder contact, or a recovery temperature
 that is still too low.
 
-## `M869` standalone recovery command
+## `M880` standalone recovery command
 
-`M869` makes the recovery sequence independently testable.
+`M880` makes the recovery sequence independently testable. `M869` is not used
+because Marlin reserves `M860–M869` when `I2C_POSITION_ENCODERS` is enabled.
 
 ```gcode
-M869 J9000 T230 O5 L20 F100 V30 U100 S0.35 B2 I250 \
+M880 J9000 T230 O5 L20 F100 V30 U100 S0.35 B2 I250 \
      C0.685 P95 D5 A1 W20 R85 K2 G4 H500 X2
 ```
 
