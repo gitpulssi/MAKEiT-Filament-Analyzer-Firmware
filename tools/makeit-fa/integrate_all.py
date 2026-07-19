@@ -14,6 +14,7 @@ for script in (
     "integrate_phase7.py",
     "integrate_phase8.py",
     "integrate_phase8_hardening.py",
+    "integrate_phase9.py",
 ):
     subprocess.check_call([sys.executable, str(HERE / script)])
 
