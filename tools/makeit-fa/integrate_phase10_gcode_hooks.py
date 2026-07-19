@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Repair and verify the Phase-10 M880/M881 Marlin G-code hooks.
+"""Normalize and verify the Phase-10 M880/M881 Marlin G-code hooks.
 
 This stage is intentionally separate from the larger conditioning patch. It
-locates the existing MAKEiT analyzer preprocessor block structurally, inserts
-M880/M881 inside that block, and verifies the result before PlatformIO builds.
+locates the existing MAKEiT analyzer preprocessor block structurally, removes
+all existing M880/M881 declarations and dispatcher lines from that block, and
+then inserts exactly one canonical pair. This repairs partial or repeated local
+integrations, including malformed lines with duplicated trailing comments.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Callable, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,106 +66,108 @@ def find_makeit_block(
     )
 
 
-def ensure_exact_line_after(
-    lines: List[str],
-    start: int,
-    end: int,
-    target: str,
-    anchors: Tuple[str, ...],
-) -> Tuple[List[str], int, bool]:
-    """Ensure target exists in [start,end], inserting after the first anchor found."""
-    block = lines[start : end + 1]
-    if any(line.rstrip("\r\n") == target for line in block):
-        return lines, end, False
-
-    for anchor in anchors:
-        for index in range(start, end + 1):
-            if lines[index].rstrip("\r\n") == anchor:
-                newline = "\r\n" if lines[index].endswith("\r\n") else "\n"
-                lines.insert(index + 1, target + newline)
-                return lines, end + 1, True
-
-    raise RuntimeError(
-        f"Unable to insert {target!r}; none of the anchors were found: {anchors!r}"
-    )
+def line_ending(line: str) -> str:
+    return "\r\n" if line.endswith("\r\n") else "\n"
 
 
-def patch_gcode_h() -> None:
+def normalize_header_block() -> None:
     path = "Marlin/src/gcode/gcode.h"
     lines = read_lines(path)
     start, end = find_makeit_block(
         lines, lambda body: "static void M879();" in body
     )
 
-    lines, end, changed_880 = ensure_exact_line_after(
-        lines,
-        start,
-        end,
-        "    static void M880();",
-        ("    static void M879();",),
-    )
-    lines, end, changed_881 = ensure_exact_line_after(
-        lines,
-        start,
-        end,
-        "    static void M881();",
-        ("    static void M880();", "    static void M879();"),
-    )
+    targets = {"static void M880();", "static void M881();"}
+    kept = []
+    removed = 0
+    for line in lines[start : end + 1]:
+        if line.strip() in targets:
+            removed += 1
+            continue
+        kept.append(line)
 
-    block = "".join(lines[start : end + 1])
-    for declaration in ("static void M880();", "static void M881();"):
-        if declaration not in block:
-            raise RuntimeError(f"gcode.h verification failed for {declaration}")
+    anchor = next(
+        (index for index, line in enumerate(kept) if line.strip() == "static void M879();"),
+        None,
+    )
+    if anchor is None:
+        raise RuntimeError("gcode.h analyzer block is missing static void M879();")
 
-    if changed_880 or changed_881:
-        write_lines(path, lines)
+    newline = line_ending(kept[anchor])
+    indent = re.match(r"[ \t]*", kept[anchor]).group(0)
+    kept[anchor + 1 : anchor + 1] = [
+        f"{indent}static void M880();{newline}",
+        f"{indent}static void M881();{newline}",
+    ]
+
+    new_lines = lines[:start] + kept + lines[end + 1 :]
+    body = "".join(kept)
+    if body.count("static void M880();") != 1:
+        raise RuntimeError("gcode.h M880 declaration normalization failed")
+    if body.count("static void M881();") != 1:
+        raise RuntimeError("gcode.h M881 declaration normalization failed")
+
+    if new_lines != lines:
+        write_lines(path, new_lines)
+        print(f"normalized {path}: removed {removed} old M880/M881 declaration line(s)")
     else:
-        print("ok Marlin/src/gcode/gcode.h: M880/M881 declarations are in analyzer block")
+        print(f"ok {path}: exactly one M880 and one M881 declaration")
 
 
-def patch_gcode_cpp() -> None:
+def normalize_dispatch_block() -> None:
     path = "Marlin/src/gcode/gcode.cpp"
     lines = read_lines(path)
     start, end = find_makeit_block(
         lines, lambda body: "case 879: M879(); break;" in body
     )
 
-    lines, end, changed_880 = ensure_exact_line_after(
-        lines,
-        start,
-        end,
-        "        case 880: M880(); break;                                  // M880: MAKEiT recovery / re-prime",
-        (
-            "        case 879: M879(); break;                                  // M879: MAKEiT graceful point abort",
-            "        case 879: M879(); break;",
-        ),
+    dispatcher_pattern = re.compile(
+        r"^\s*case\s+(880|881)\s*:\s*M\1\(\)\s*;\s*break\s*;"
     )
-    lines, end, changed_881 = ensure_exact_line_after(
-        lines,
-        start,
-        end,
-        "        case 881: M881(); break;                                  // M881: MAKEiT point-conditioning configuration",
+    kept = []
+    removed = 0
+    for line in lines[start : end + 1]:
+        if dispatcher_pattern.match(line):
+            removed += 1
+            continue
+        kept.append(line)
+
+    anchor = next(
         (
-            "        case 880: M880(); break;                                  // M880: MAKEiT recovery / re-prime",
-            "        case 880: M880(); break;",
+            index
+            for index, line in enumerate(kept)
+            if "case 879: M879(); break;" in line
         ),
+        None,
     )
+    if anchor is None:
+        raise RuntimeError("gcode.cpp analyzer block is missing case 879")
 
-    block = "".join(lines[start : end + 1])
-    for dispatcher in ("case 880: M880(); break;", "case 881: M881(); break;"):
-        if dispatcher not in block:
-            raise RuntimeError(f"gcode.cpp verification failed for {dispatcher}")
+    newline = line_ending(kept[anchor])
+    indent = re.match(r"[ \t]*", kept[anchor]).group(0)
+    kept[anchor + 1 : anchor + 1] = [
+        f"{indent}case 880: M880(); break;                                  // M880: MAKEiT recovery / re-prime{newline}",
+        f"{indent}case 881: M881(); break;                                  // M881: MAKEiT point-conditioning configuration{newline}",
+    ]
 
-    if changed_880 or changed_881:
-        write_lines(path, lines)
+    new_lines = lines[:start] + kept + lines[end + 1 :]
+    body = "".join(kept)
+    if len(re.findall(r"case\s+880\s*:\s*M880\(\)\s*;\s*break\s*;", body)) != 1:
+        raise RuntimeError("gcode.cpp M880 dispatcher normalization failed")
+    if len(re.findall(r"case\s+881\s*:\s*M881\(\)\s*;\s*break\s*;", body)) != 1:
+        raise RuntimeError("gcode.cpp M881 dispatcher normalization failed")
+
+    if new_lines != lines:
+        write_lines(path, new_lines)
+        print(f"normalized {path}: removed {removed} old M880/M881 dispatcher line(s)")
     else:
-        print("ok Marlin/src/gcode/gcode.cpp: M880/M881 dispatchers are in analyzer block")
+        print(f"ok {path}: exactly one M880 and one M881 dispatcher")
 
 
 def main() -> int:
-    patch_gcode_h()
-    patch_gcode_cpp()
-    print("Phase-10 M880/M881 G-code hooks are present and verified.")
+    normalize_header_block()
+    normalize_dispatch_block()
+    print("Phase-10 M880/M881 G-code hooks are normalized and verified.")
     return 0
 
 
