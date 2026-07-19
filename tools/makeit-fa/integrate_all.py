@@ -9,7 +9,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 
-for script in ("integrate_phase0.py", "integrate_phase7.py"):
+for script in ("integrate_phase0.py", "integrate_phase7.py", "integrate_phase8.py"):
     subprocess.check_call([sys.executable, str(HERE / script)])
 
 print("All MAKEiT filament-analyzer integration stages are in place.")
