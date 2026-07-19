@@ -8,7 +8,7 @@
  *
  * PLA / 0.6 mm nozzle example, 190..230 C in 5 C increments:
  *   M109 S190
- *   M870 J2000 T230 E5 M230 Y1.75 F50 U300 V50 O10
+ *   M870 J2000 T230 E5 M230 Y1.75 F50 U550 V100 O10
  *        L40 S0.35 B2 I250 C0.685 P95 D5 A1 W20 R85 K2 G4 H500 X2
  *
  * Y is filament diameter, not nozzle diameter. Nozzle diameter affects the
