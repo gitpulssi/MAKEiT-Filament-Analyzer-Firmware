@@ -1,11 +1,12 @@
 /**
- * MAKEiT Filament Analyzer - Phase 8 temperature / speed envelope
+ * MAKEiT Filament Analyzer - Phase 8/9 temperature / speed envelope
  */
 #include "../inc/MarlinConfig.h"
 
 #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)
 
 #include "makeit_fa_envelope.h"
+#include "makeit_fa_recovery.h"
 #include "makeit_fa_transaction.h"
 #include "../core/serial.h"
 #include "../module/temperature.h"
@@ -19,8 +20,10 @@ uint32_t MakeItFATemperatureEnvelope::params_hash_ = 0;
 uint32_t MakeItFATemperatureEnvelope::started_ms_ = 0;
 uint32_t MakeItFATemperatureEnvelope::finished_ms_ = 0;
 uint32_t MakeItFATemperatureEnvelope::current_row_campaign_id_ = 0;
+uint32_t MakeItFATemperatureEnvelope::current_recovery_id_ = 0;
 uint32_t MakeItFATemperatureEnvelope::result_crc_ = 0;
 uint16_t MakeItFATemperatureEnvelope::speed_points_per_row_ = 0;
+uint16_t MakeItFATemperatureEnvelope::row_id_stride_ = 0;
 uint8_t MakeItFATemperatureEnvelope::row_index_ = 0;
 uint8_t MakeItFATemperatureEnvelope::row_count_ = 0;
 uint8_t MakeItFATemperatureEnvelope::completed_rows_ = 0;
@@ -32,10 +35,7 @@ MakeItFATemperatureEnvelope::RowResult MakeItFATemperatureEnvelope::rows_[MakeIt
 MakeItFATemperatureEnvelope makeit_fa_envelope;
 
 uint32_t MakeItFATemperatureEnvelope::float_bits(const float value) {
-  union FloatBits {
-    float f;
-    uint32_t u;
-  } bits;
+  union FloatBits { float f; uint32_t u; } bits;
   bits.f = value;
   return bits.u;
 }
@@ -63,6 +63,7 @@ uint32_t MakeItFATemperatureEnvelope::hash_parameters(const MakeItFATemperatureE
   hash = hash_word(hash, float_bits(p.max_temp_c));
   hash = hash_word(hash, float_bits(p.temp_step_c));
   hash = hash_word(hash, float_bits(p.filament_diameter_mm));
+  hash = hash_word(hash, float_bits(p.recovery_temp_c));
   hash = hash_word(hash, float_bits(p.speed.start_feed_mm_min));
   hash = hash_word(hash, float_bits(p.speed.max_feed_mm_min));
   hash = hash_word(hash, float_bits(p.speed.step_feed_mm_min));
@@ -85,9 +86,7 @@ uint32_t MakeItFATemperatureEnvelope::hash_parameters(const MakeItFATemperatureE
 }
 
 uint16_t MakeItFATemperatureEnvelope::count_speed_points(const float start_feed, const float max_feed, const float step_feed) {
-  if (start_feed <= 0.0f || max_feed < start_feed || step_feed <= 0.0f)
-    return 0;
-
+  if (start_feed <= 0.0f || max_feed < start_feed || step_feed <= 0.0f) return 0;
   uint16_t count = 0;
   while (count < 101) {
     const float feed = start_feed + float(count) * step_feed;
@@ -98,9 +97,7 @@ uint16_t MakeItFATemperatureEnvelope::count_speed_points(const float start_feed,
 }
 
 uint8_t MakeItFATemperatureEnvelope::count_temperature_rows(const float start_temp, const float max_temp, const float temp_step) {
-  if (start_temp <= 0.0f || max_temp < start_temp || temp_step <= 0.0f)
-    return 0;
-
+  if (start_temp <= 0.0f || max_temp < start_temp || temp_step <= 0.0f) return 0;
   uint8_t count = 0;
   while (count <= MAX_ROWS) {
     const float temp = start_temp + float(count) * temp_step;
@@ -112,13 +109,15 @@ uint8_t MakeItFATemperatureEnvelope::count_temperature_rows(const float start_te
 
 const char* MakeItFATemperatureEnvelope::state_name(const State state) {
   switch (state) {
-    case ENV_RUNNING_ROW:  return "RUNNING_ROW";
-    case ENV_COMPLETE:     return "COMPLETE";
-    case ENV_LIMIT_FOUND:  return "LIMIT_FOUND";
-    case ENV_INVALID_TEMP: return "INVALID_TEMP";
-    case ENV_ABORTED:      return "ABORTED";
-    case ENV_ERROR:        return "ERROR";
-    default:               return "EMPTY";
+    case ENV_RUNNING_ROW:     return "RUNNING_ROW";
+    case ENV_RECOVERING:      return "RECOVERING";
+    case ENV_COMPLETE:        return "COMPLETE";
+    case ENV_LIMIT_FOUND:     return "LIMIT_FOUND";
+    case ENV_RECOVERY_FAILED: return "RECOVERY_FAILED";
+    case ENV_INVALID_TEMP:    return "INVALID_TEMP";
+    case ENV_ABORTED:         return "ABORTED";
+    case ENV_ERROR:           return "ERROR";
+    default:                  return "EMPTY";
   }
 }
 
@@ -146,7 +145,6 @@ void MakeItFATemperatureEnvelope::normalize_speed_params(MakeItFASpeedCampaignPa
   p.max_feed_mm_min = constrain(p.max_feed_mm_min, 1.0f, 2000.0f);
   p.step_feed_mm_min = constrain(p.step_feed_mm_min, 1.0f, 1000.0f);
   p.settle_seconds = constrain(p.settle_seconds, uint16_t(0), uint16_t(120));
-
   p.point.total_mm = constrain(p.point.total_mm, 20.0f, 500.0f);
   p.point.feed_mm_min = p.start_feed_mm_min;
   p.point.segment_mm = constrain(p.point.segment_mm, 0.05f, 0.35f);
@@ -188,6 +186,10 @@ void MakeItFATemperatureEnvelope::emit_row(const uint8_t row) {
   SERIAL_ECHOPGM(" q_fail_mm3_s="); SERIAL_ECHO(q_fail);
   SERIAL_ECHOPGM(" point_result="); SERIAL_ECHO(r.last_point_result_code);
   SERIAL_ECHOPGM(" point_crc="); SERIAL_ECHO(r.last_point_crc);
+  SERIAL_ECHOPGM(" recovery_attempted="); SERIAL_ECHO(r.recovery_attempted ? 1 : 0);
+  SERIAL_ECHOPGM(" recovery_passed="); SERIAL_ECHO(r.recovery_passed ? 1 : 0);
+  SERIAL_ECHOPGM(" recovery_id="); SERIAL_ECHO(r.recovery_id);
+  SERIAL_ECHOPGM(" recovery_crc="); SERIAL_ECHO(r.recovery_crc);
   SERIAL_ECHOLNPGM("");
 }
 
@@ -200,12 +202,15 @@ void MakeItFATemperatureEnvelope::report(const char *tag, const bool include_row
   SERIAL_ECHOPGM(" rows="); SERIAL_ECHO(row_count_);
   SERIAL_ECHOPGM(" completed_rows="); SERIAL_ECHO(completed_rows_);
   SERIAL_ECHOPGM(" row_campaign_id="); SERIAL_ECHO(current_row_campaign_id_);
+  SERIAL_ECHOPGM(" recovery_id="); SERIAL_ECHO(current_recovery_id_);
   SERIAL_ECHOPGM(" temp_c="); SERIAL_ECHO(current_temp_c_);
   SERIAL_ECHOPGM(" start_temp_c="); SERIAL_ECHO(params_.start_temp_c);
   SERIAL_ECHOPGM(" max_temp_c="); SERIAL_ECHO(params_.max_temp_c);
   SERIAL_ECHOPGM(" temp_step_c="); SERIAL_ECHO(params_.temp_step_c);
+  SERIAL_ECHOPGM(" recovery_temp_c="); SERIAL_ECHO(params_.recovery_temp_c);
   SERIAL_ECHOPGM(" filament_diameter_mm="); SERIAL_ECHO(params_.filament_diameter_mm);
   SERIAL_ECHOPGM(" speed_points="); SERIAL_ECHO(speed_points_per_row_);
+  SERIAL_ECHOPGM(" row_id_stride="); SERIAL_ECHO(row_id_stride_);
   SERIAL_ECHOPGM(" cancel="); SERIAL_ECHO(cancel_requested_ ? 1 : 0);
   SERIAL_ECHOPGM(" started_ms="); SERIAL_ECHO(started_ms_);
   SERIAL_ECHOPGM(" finished_ms="); SERIAL_ECHO(finished_ms_);
@@ -226,6 +231,7 @@ void MakeItFATemperatureEnvelope::capture_result_crc() {
   crc = crc32_word(crc, row_count_);
   crc = crc32_word(crc, completed_rows_);
   crc = crc32_word(crc, float_bits(params_.filament_diameter_mm));
+  crc = crc32_word(crc, float_bits(params_.recovery_temp_c));
 
   for (uint8_t i = 0; i < completed_rows_; ++i) {
     const RowResult &r = rows_[i];
@@ -234,8 +240,12 @@ void MakeItFATemperatureEnvelope::capture_result_crc() {
     crc = crc32_word(crc, float_bits(r.first_fail_feed_mm_min));
     crc = crc32_word(crc, r.row_campaign_id);
     crc = crc32_word(crc, r.last_point_crc);
+    crc = crc32_word(crc, r.recovery_id);
+    crc = crc32_word(crc, r.recovery_crc);
     crc = crc32_word(crc, r.campaign_state);
     crc = crc32_word(crc, r.last_point_result_code);
+    crc = crc32_word(crc, r.recovery_attempted ? 1UL : 0UL);
+    crc = crc32_word(crc, r.recovery_passed ? 1UL : 0UL);
   }
   result_crc_ = crc ^ 0xFFFFFFFFUL;
 }
@@ -250,17 +260,47 @@ void MakeItFATemperatureEnvelope::finish(const State terminal_state, const char 
 
 bool MakeItFATemperatureEnvelope::start_current_row() {
   if (row_index_ >= row_count_) return false;
-  if (makeit_fa_campaign.active() || makeit_fa_transaction.running()) return false;
+  if (makeit_fa_campaign.active() || makeit_fa_recovery.active() || makeit_fa_transaction.running()) return false;
 
   current_temp_c_ = params_.start_temp_c + float(row_index_) * params_.temp_step_c;
-  current_row_campaign_id_ = envelope_id_ + uint32_t(row_index_) * uint32_t(speed_points_per_row_);
+  current_row_campaign_id_ = envelope_id_ + uint32_t(row_index_) * uint32_t(row_id_stride_);
+  current_recovery_id_ = 0;
   thermalManager.setTargetHotend(celsius_t(current_temp_c_ + 0.5f), 0);
 
-  if (!makeit_fa_campaign.start(current_row_campaign_id_, params_.speed))
-    return false;
+  if (!makeit_fa_campaign.start(current_row_campaign_id_, params_.speed)) return false;
 
   state_ = ENV_RUNNING_ROW;
   report("row_started");
+  return true;
+}
+
+bool MakeItFATemperatureEnvelope::start_recovery_for_next_row() {
+  if (completed_rows_ == 0 || uint8_t(row_index_ + 1) >= row_count_) return false;
+
+  RowResult &r = rows_[completed_rows_ - 1];
+  current_recovery_id_ = current_row_campaign_id_ + uint32_t(speed_points_per_row_);
+
+  MakeItFARecoveryParams recovery;
+  recovery.recovery_temp_c = params_.recovery_temp_c;
+  recovery.return_temp_c = params_.start_temp_c + float(row_index_ + 1) * params_.temp_step_c;
+  recovery.settle_seconds = params_.speed.settle_seconds;
+  recovery.prime_mm = 20.0f;
+  recovery.prime_feed_mm_min = params_.speed.start_feed_mm_min;
+  recovery.validation = params_.speed.point;
+  recovery.validation.total_mm = constrain(params_.speed.point.total_mm, 20.0f, 40.0f);
+  recovery.validation.feed_mm_min = params_.speed.start_feed_mm_min;
+  recovery.validation.auto_stop_enabled = true;
+
+  r.recovery_attempted = true;
+  r.recovery_passed = false;
+  r.recovery_id = current_recovery_id_;
+  r.recovery_crc = 0;
+
+  if (!makeit_fa_recovery.start(current_recovery_id_, recovery)) return false;
+
+  state_ = ENV_RECOVERING;
+  emit_row(completed_rows_ - 1);
+  report("recovery_started");
   return true;
 }
 
@@ -276,40 +316,74 @@ void MakeItFATemperatureEnvelope::handle_row_result() {
   r.first_fail_feed_mm_min = makeit_fa_campaign.first_fail_feed_mm_min();
   r.row_campaign_id = current_row_campaign_id_;
   r.last_point_crc = makeit_fa_campaign.last_point_result_crc();
+  r.recovery_id = 0;
+  r.recovery_crc = 0;
   r.campaign_state = uint8_t(makeit_fa_campaign.state());
   r.last_point_result_code = makeit_fa_campaign.last_point_result_code();
+  r.recovery_attempted = false;
+  r.recovery_passed = false;
   ++completed_rows_;
-  emit_row(completed_rows_ - 1);
 
   switch (makeit_fa_campaign.state()) {
     case MakeItFASpeedCampaign::CAM_COMPLETE:
+      emit_row(completed_rows_ - 1);
       if (uint8_t(row_index_ + 1) >= row_count_) {
         finish(ENV_COMPLETE, "complete");
         return;
       }
       ++row_index_;
-      if (!start_current_row())
-        finish(ENV_ERROR, "next_row_start_failed");
+      if (!start_current_row()) finish(ENV_ERROR, "next_row_start_failed");
       break;
 
     case MakeItFASpeedCampaign::CAM_LIMIT_FOUND:
-      // Continuing after a real feed-loss point requires the future recovery /
-      // re-prime state machine. Stop here rather than contaminate later rows.
-      finish(ENV_LIMIT_FOUND, "limit_found_recovery_required");
+      if (uint8_t(row_index_ + 1) >= row_count_ || params_.recovery_temp_c <= 0.0f) {
+        emit_row(completed_rows_ - 1);
+        finish(ENV_LIMIT_FOUND, params_.recovery_temp_c > 0.0f ? "limit_found_final_row" : "limit_found_recovery_disabled");
+        return;
+      }
+      if (!start_recovery_for_next_row())
+        finish(ENV_ERROR, "recovery_start_failed");
       break;
 
     case MakeItFASpeedCampaign::CAM_INVALID_TEMP:
+      emit_row(completed_rows_ - 1);
       finish(ENV_INVALID_TEMP, "invalid_temp");
       break;
 
     case MakeItFASpeedCampaign::CAM_ABORTED:
+      emit_row(completed_rows_ - 1);
       finish(ENV_ABORTED, "aborted");
       break;
 
     default:
+      emit_row(completed_rows_ - 1);
       finish(ENV_ERROR, "row_error");
       break;
   }
+}
+
+void MakeItFATemperatureEnvelope::handle_recovery_result() {
+  if (completed_rows_ == 0 || !makeit_fa_recovery.terminal()
+      || makeit_fa_recovery.current_recovery_id() != current_recovery_id_) {
+    finish(ENV_ERROR, "recovery_state_error");
+    return;
+  }
+
+  RowResult &r = rows_[completed_rows_ - 1];
+  r.recovery_crc = makeit_fa_recovery.result_crc();
+  r.recovery_passed = makeit_fa_recovery.state() == MakeItFARecovery::REC_COMPLETE;
+  emit_row(completed_rows_ - 1);
+
+  if (makeit_fa_recovery.state() == MakeItFARecovery::REC_COMPLETE) {
+    ++row_index_;
+    if (!start_current_row()) finish(ENV_ERROR, "post_recovery_row_start_failed");
+    return;
+  }
+
+  if (makeit_fa_recovery.state() == MakeItFARecovery::REC_ABORTED)
+    finish(ENV_ABORTED, "recovery_aborted");
+  else
+    finish(ENV_RECOVERY_FAILED, "recovery_failed");
 }
 
 bool MakeItFATemperatureEnvelope::start(const uint32_t envelope_id, const MakeItFATemperatureEnvelopeParams &requested) {
@@ -322,6 +396,8 @@ bool MakeItFATemperatureEnvelope::start(const uint32_t envelope_id, const MakeIt
   normalized.start_temp_c = float(thermalManager.degTargetHotend(0));
   normalized.max_temp_c = float(int32_t(normalized.max_temp_c + 0.5f));
   normalized.temp_step_c = float(int32_t(normalized.temp_step_c + 0.5f));
+  normalized.recovery_temp_c = normalized.recovery_temp_c > 0.0f
+    ? float(int32_t(normalized.recovery_temp_c + 0.5f)) : 0.0f;
   normalized.filament_diameter_mm = constrain(normalized.filament_diameter_mm, 1.0f, 3.5f);
   normalize_speed_params(normalized.speed);
 
@@ -342,6 +418,15 @@ bool MakeItFATemperatureEnvelope::start(const uint32_t envelope_id, const MakeIt
 
   if (normalized.temp_step_c <= 0.0f) {
     SERIAL_ECHOLNPGM("FA8: error=INVALID_TEMP_STEP");
+    return false;
+  }
+
+  if (normalized.recovery_temp_c > 0.0f
+      && (normalized.recovery_temp_c < normalized.max_temp_c || normalized.recovery_temp_c > max_allowed)) {
+    SERIAL_ECHOPGM("FA8: error=INVALID_RECOVERY_TEMP recovery="); SERIAL_ECHO(normalized.recovery_temp_c);
+    SERIAL_ECHOPGM(" required_min="); SERIAL_ECHO(normalized.max_temp_c);
+    SERIAL_ECHOPGM(" allowed_max="); SERIAL_ECHO(max_allowed);
+    SERIAL_ECHOLNPGM("");
     return false;
   }
 
@@ -366,12 +451,13 @@ bool MakeItFATemperatureEnvelope::start(const uint32_t envelope_id, const MakeIt
     return false;
   }
 
-  const uint32_t total_points = uint32_t(rows) * uint32_t(speed_points);
-  if (!total_points || envelope_id > 0xFFFFFFFFUL - (total_points - 1UL)) {
+  const uint16_t stride = speed_points + (normalized.recovery_temp_c > 0.0f ? 1U : 0U);
+  const uint32_t total_ids = uint32_t(rows) * uint32_t(stride);
+  if (!total_ids || envelope_id > 0xFFFFFFFFUL - (total_ids - 1UL)) {
     SERIAL_ECHOLNPGM("FA8: error=POINT_ID_OVERFLOW");
     return false;
   }
-  const uint32_t final_point_id = envelope_id + total_points - 1UL;
+  const uint32_t final_id = envelope_id + total_ids - 1UL;
   const uint32_t hash = hash_parameters(normalized);
 
   if (record_valid_ && envelope_id == envelope_id_) {
@@ -386,27 +472,36 @@ bool MakeItFATemperatureEnvelope::start(const uint32_t envelope_id, const MakeIt
     return true;
   }
 
-  if (active() || makeit_fa_campaign.active() || makeit_fa_transaction.running()) {
+  if (active() || makeit_fa_campaign.active() || makeit_fa_recovery.active() || makeit_fa_transaction.running()) {
     SERIAL_ECHOPGM("FA8: error=BUSY envelope_id="); SERIAL_ECHO(envelope_id_);
     SERIAL_ECHOLNPGM("");
     return false;
   }
 
   if (makeit_fa_transaction.has_record()) {
-    const uint32_t retained_point_id = makeit_fa_transaction.current_point_id();
-    if (retained_point_id >= envelope_id && retained_point_id <= final_point_id) {
-      SERIAL_ECHOPGM("FA8: error=POINT_ID_RANGE_IN_USE retained_point_id="); SERIAL_ECHO(retained_point_id);
+    const uint32_t retained_id = makeit_fa_transaction.current_point_id();
+    if (retained_id >= envelope_id && retained_id <= final_id) {
+      SERIAL_ECHOPGM("FA8: error=POINT_ID_RANGE_IN_USE retained_point_id="); SERIAL_ECHO(retained_id);
       SERIAL_ECHOPGM(" range_start="); SERIAL_ECHO(envelope_id);
-      SERIAL_ECHOPGM(" range_end="); SERIAL_ECHO(final_point_id);
+      SERIAL_ECHOPGM(" range_end="); SERIAL_ECHO(final_id);
       SERIAL_ECHOLNPGM("");
       return false;
     }
   }
 
   if (makeit_fa_campaign.has_record()) {
-    const uint32_t retained_campaign_id = makeit_fa_campaign.current_campaign_id();
-    if (retained_campaign_id >= envelope_id && retained_campaign_id <= final_point_id) {
-      SERIAL_ECHOPGM("FA8: error=CAMPAIGN_ID_RANGE_IN_USE retained_campaign_id="); SERIAL_ECHO(retained_campaign_id);
+    const uint32_t retained_id = makeit_fa_campaign.current_campaign_id();
+    if (retained_id >= envelope_id && retained_id <= final_id) {
+      SERIAL_ECHOPGM("FA8: error=CAMPAIGN_ID_RANGE_IN_USE retained_campaign_id="); SERIAL_ECHO(retained_id);
+      SERIAL_ECHOLNPGM("");
+      return false;
+    }
+  }
+
+  if (makeit_fa_recovery.has_record()) {
+    const uint32_t retained_id = makeit_fa_recovery.current_recovery_id();
+    if (retained_id >= envelope_id && retained_id <= final_id) {
+      SERIAL_ECHOPGM("FA8: error=RECOVERY_ID_RANGE_IN_USE retained_recovery_id="); SERIAL_ECHO(retained_id);
       SERIAL_ECHOLNPGM("");
       return false;
     }
@@ -421,8 +516,10 @@ bool MakeItFATemperatureEnvelope::start(const uint32_t envelope_id, const MakeIt
   started_ms_ = millis();
   finished_ms_ = 0;
   current_row_campaign_id_ = envelope_id;
+  current_recovery_id_ = 0;
   result_crc_ = 0;
   speed_points_per_row_ = speed_points;
+  row_id_stride_ = stride;
   row_index_ = 0;
   row_count_ = rows;
   completed_rows_ = 0;
@@ -439,21 +536,24 @@ bool MakeItFATemperatureEnvelope::start(const uint32_t envelope_id, const MakeIt
 }
 
 void MakeItFATemperatureEnvelope::idle() {
-  if (state_ != ENV_RUNNING_ROW) return;
-  if (makeit_fa_campaign.active()) return;
-
-  if (!makeit_fa_campaign.terminal()
-      || makeit_fa_campaign.current_campaign_id() != current_row_campaign_id_) {
-    finish(ENV_ERROR, "campaign_state_error");
+  if (state_ == ENV_RUNNING_ROW) {
+    if (makeit_fa_campaign.active()) return;
+    if (!makeit_fa_campaign.terminal()
+        || makeit_fa_campaign.current_campaign_id() != current_row_campaign_id_) {
+      finish(ENV_ERROR, "campaign_state_error");
+      return;
+    }
+    handle_row_result();
     return;
   }
 
-  handle_row_result();
+  if (state_ != ENV_RECOVERING) return;
+  if (makeit_fa_recovery.active()) return;
+  handle_recovery_result();
 }
 
 void MakeItFATemperatureEnvelope::query(const bool has_envelope_id, const uint32_t requested_envelope_id) {
   idle();
-
   if (!record_valid_) {
     SERIAL_ECHOLNPGM("FA8: state=EMPTY result=NONE");
     return;
@@ -465,11 +565,11 @@ void MakeItFATemperatureEnvelope::query(const bool has_envelope_id, const uint32
     return;
   }
   report("query", true);
+  if (state_ == ENV_RECOVERING) makeit_fa_recovery.query(true, current_recovery_id_);
 }
 
 bool MakeItFATemperatureEnvelope::cancel(const bool has_envelope_id, const uint32_t requested_envelope_id) {
   idle();
-
   if (!record_valid_) {
     SERIAL_ECHOLNPGM("FA8: error=NO_ENVELOPE");
     return false;
@@ -484,7 +584,7 @@ bool MakeItFATemperatureEnvelope::cancel(const bool has_envelope_id, const uint3
     report("cancel_replay", true);
     return true;
   }
-  if (state_ != ENV_RUNNING_ROW) {
+  if (!active()) {
     SERIAL_ECHOPGM("FA8: error=NOT_ACTIVE state="); SERIAL_ECHO(state_name(state_));
     SERIAL_ECHOLNPGM("");
     return false;
@@ -495,7 +595,10 @@ bool MakeItFATemperatureEnvelope::cancel(const bool has_envelope_id, const uint3
   }
 
   cancel_requested_ = true;
-  if (!makeit_fa_campaign.cancel(true, current_row_campaign_id_)) {
+  const bool accepted = state_ == ENV_RECOVERING
+    ? makeit_fa_recovery.cancel(true, current_recovery_id_)
+    : makeit_fa_campaign.cancel(true, current_row_campaign_id_);
+  if (!accepted) {
     cancel_requested_ = false;
     SERIAL_ECHOLNPGM("FA8: error=CANCEL_REJECTED");
     return false;
