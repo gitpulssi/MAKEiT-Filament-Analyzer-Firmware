@@ -1,30 +1,18 @@
 /**
- * M870 - MAKEiT Filament Analyzer Phase-8 temperature / speed envelope
+ * M870 - MAKEiT Filament Analyzer Phase-8/9 temperature / speed envelope
  *
  * The current hotend target is the starting temperature. The command advances
  * the target in E-degree steps through T and runs the validated M872 speed
- * ladder at every row.
+ * ladder at every row. M selects the recovery / re-prime temperature; M0 keeps
+ * the conservative Phase-8 behavior and stops at the first feed limit.
  *
- * Start example:
- *   M109 S220
- *   M870 J1000 T240 E10 Y1.75 F100 U300 V100 O5
- *        L50 S0.35 B2 I250 C0.685 P95 D5 A1 W20 R85 K2 G4 H500 X2
+ * PLA / 0.9 mm nozzle example:
+ *   M109 S190
+ *   M870 J2000 T230 E10 M230 Y1.75 F50 U300 V50 O10
+ *        L40 S0.35 B2 I250 C0.685 P95 D5 A1 W20 R85 K2 G4 H500 X2
  *
- * Query:
- *   M870 Q
- *   M870 Q J1000
- *
- * Cancel:
- *   M870 Z
- *   M870 Z J1000
- *
- * Envelope parameters:
- *   J  envelope ID and first reserved point ID
- *   T  maximum target temperature in C; start is the current hotend target
- *   E  temperature increment in C
- *   Y  filament diameter in mm, used for reported volumetric flow
- *
- * Remaining parameters mirror M872.
+ * Query:  M870 Q [J2000]
+ * Cancel: M870 Z [J2000]
  */
 #include "../../inc/MarlinConfig.h"
 
@@ -58,6 +46,7 @@ void GcodeSuite::M870() {
   envelope.max_temp_c = parser.seenval('T') ? parser.value_float() : envelope.start_temp_c;
   envelope.temp_step_c = parser.seenval('E') ? parser.value_float() : 10.0f;
   envelope.filament_diameter_mm = parser.seenval('Y') ? parser.value_float() : 1.75f;
+  envelope.recovery_temp_c = parser.seenval('M') ? parser.value_float() : envelope.max_temp_c;
 
   MakeItFASpeedCampaignParams &campaign = envelope.speed;
   campaign.start_feed_mm_min = parser.seenval('F') ? parser.value_float() : 100.0f;
