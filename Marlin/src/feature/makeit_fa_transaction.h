@@ -57,9 +57,13 @@ public:
   static bool request_abort_current(const char *source);
 
   static bool running() { return state_ == TX_RUNNING || state_ == TX_ABORTING; }
+  static bool terminal() { return state_ == TX_TERMINAL || state_ == TX_ABORTED; }
+  static bool has_record() { return record_valid_; }
+  static State state() { return state_; }
   static uint32_t current_point_id() { return point_id_; }
   static uint32_t current_params_hash() { return params_hash_; }
   static bool abort_requested() { return abort_requested_; }
+  static uint8_t result_code() { return result_code_; }
   static uint32_t result_crc() { return result_crc_; }
   static uint32_t result_generation() { return result_generation_; }
 
