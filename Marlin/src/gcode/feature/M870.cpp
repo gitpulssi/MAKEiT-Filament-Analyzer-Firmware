@@ -6,16 +6,19 @@
  * ladder at every row. M selects the recovery / re-prime temperature; M0 keeps
  * the conservative Phase-8 behavior and stops at the first feed limit.
  *
- * PLA / 0.6 mm nozzle example, 190..230 C in 5 C increments:
- *   M109 S190
- *   M870 J2000 T230 E5 M230 Y1.75 F50 U550 V100 O10
- *        L40 S0.35 B2 I250 C0.685 P95 D5 A1 W20 R85 K2 G4 H500 X2
+ * Dyze Pro / PLA / 0.6 mm nozzle high-flow example, 180..220 C:
+ *   M881 P50
+ *   M109 S180
+ *   M870 J8000 T220 E10 M220 Y1.75 F300 U600 V50 O10
+ *        L200 S0.35 B2 I250 C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
  *
+ * This full envelope can exceed a 30-minute OctoPrint idle-heater timeout.
+ * Disable or extend that host-side timeout, or run one M872 row at a time.
  * Y is filament diameter, not nozzle diameter. Nozzle diameter affects the
  * physical flow ceiling but does not enter the filament-volume conversion.
  *
- * Query:  M870 Q [J2000]
- * Cancel: M870 Z [J2000]
+ * Query:  M870 Q [J8000]
+ * Cancel: M870 Z [J8000]
  */
 #include "../../inc/MarlinConfig.h"
 
