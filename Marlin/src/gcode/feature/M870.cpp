@@ -6,12 +6,15 @@
  * ladder at every row. M selects the recovery / re-prime temperature; M0 keeps
  * the conservative Phase-8 behavior and stops at the first feed limit.
  *
- * Dyze Pro / PLA / 0.6 mm nozzle high-flow example, 180..220 C:
+ * Dyze Pro / PLA / 0.6 mm nozzle throughput-discovery example, 180..220 C:
  *   M881 P50
  *   M109 S180
  *   M870 J8000 T220 E10 M220 Y1.75 F300 U600 V50 O10
- *        L200 S0.35 B2 I250 C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
+ *        L200 S0.35 B2 I250 C0.685 P85 D3 A1 W50 R85 K2 G4 H500 X2
  *
+ * P85 lets the ladder continue through modest speed-dependent under-feed so the
+ * physical throughput curve can be measured. Inspect FA2 efficiency afterward
+ * to locate the stricter 97% printing-accuracy boundary.
  * This full envelope can exceed a 30-minute OctoPrint idle-heater timeout.
  * Disable or extend that host-side timeout, or run one M872 row at a time.
  * Y is filament diameter, not nozzle diameter. Nozzle diameter affects the
