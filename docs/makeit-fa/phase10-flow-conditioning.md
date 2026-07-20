@@ -29,6 +29,40 @@ The reset default remains 20 mm. Non-zero values are constrained to 10–100 mm.
 For Dyze Pro high-flow tests use 50 mm. That provides 10 seconds of flow at F300
 and 5 seconds at F600 before measurement.
 
+## Two different flow limits
+
+A single pass threshold cannot answer both questions:
+
+```text
+printing-accuracy limit: commanded flow is reproduced within about 3%
+physical-throughput limit: filament still moves without severe slip or blockage
+```
+
+Use `P97` for a narrow printing-accuracy refinement campaign. It stops as soon as
+whole-point efficiency falls below 97%.
+
+Use `P85` for high-flow discovery. This allows the ladder to continue through
+moderate under-feed while `R85 K2`, pulse-gap monitoring, and the bounded segment
+horizon still stop a severe loss of motion. The `FA2 efficiency_pct` records then
+show where the curve crosses 97%, 95%, 90%, and 85%.
+
+The delivered flow estimate is:
+
+```text
+Q_delivered = Q_commanded × efficiency_pct / 100
+```
+
+The July 20 500 mm test at 180 C demonstrated why this distinction matters:
+
+```text
+F250: 10.02 mm3/s commanded × 97.23% = 9.74 mm3/s delivered
+F275: 11.03 mm3/s commanded × 96.06% = 10.59 mm3/s delivered
+```
+
+F275 failed a `P97` accuracy campaign even though it delivered more polymer per
+second. Stopping there is correct for accuracy mapping but wrong for discovering
+the extruder's maximum physical throughput.
+
 ## High-flow PLA profile
 
 For the 0.6 mm nozzle use:
@@ -38,7 +72,7 @@ temperatures: 180, 190, 200, 210, 220 C
 feed ladder:  F300, F350, F400, F450, F500, F550, F600
 conditioning: 50 mm
 measurement:  200 mm
-pass:         P97
+hard pass:     P85
 thermal:      D3
 rolling:      W50 R85 K2
 ```
@@ -62,20 +96,34 @@ changes whole-point efficiency by about 0.73 percentage points.
 
 ```gcode
 M881 P50
-M109 S180
-M872 J8000 F300 U600 V50 O10 L200 S0.35 B2 I250 \
-     C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
+M109 S190
+M872 J8100 F300 U600 V50 O10 L200 S0.35 B2 I250 \
+     C0.685 P85 D3 A1 W50 R85 K2 G4 H500 X2
 ```
 
-Repeat at 190, 200, 210, and 220 C using different campaign IDs.
+Repeat at 200, 210, and 220 C using different campaign IDs. Run 180 C separately
+because its 97% printing-accuracy boundary is already known to lie between F250
+and F275.
+
+After a throughput-discovery row, inspect every `FA2` record:
+
+```text
+efficiency >= 97%  accurate printing region
+efficiency 95–97%  marginal accuracy; possible slicer compensation region
+efficiency 85–95%  throughput discovery only; not a direct slicer limit
+efficiency < 85%   hard failure / stop region
+```
 
 If a row ends in `LIMIT_FOUND`, set the next-row target and perform recovery:
 
 ```gcode
-M109 S190
-M880 J8090 T220 O10 L50 F150 V100 U150 S0.35 B2 I250 \
+M109 S200
+M880 J8190 T220 O10 L50 F150 V100 U150 S0.35 B2 I250 \
      C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
 ```
+
+Recovery validation remains `P97`; recovery should establish clean, accurate feed
+before another campaign begins.
 
 ## Full automatic envelope
 
@@ -83,13 +131,13 @@ Use only after disabling or extending the OctoPrint idle-heater timeout:
 
 ```gcode
 M881 P50
-M109 S180
+M109 S190
 M870 J9000 T220 E10 M220 Y1.75 F300 U600 V50 O10 L200 \
-     S0.35 B2 I250 C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
+     S0.35 B2 I250 C0.685 P85 D3 A1 W50 R85 K2 G4 H500 X2
 ```
 
-Seven speed points plus one recovery slot give a row stride of eight. Five rows
-reserve IDs 9000–9039. Maximum normal filament use is 8750 mm.
+Seven speed points plus one recovery slot give a row stride of eight. Four rows
+reserve IDs 9000–9031. Maximum normal filament use is 7000 mm.
 
 ## Why the previous heater stopped
 
@@ -114,7 +162,8 @@ not itself turn off the heater.
 ```text
 conditioning speed equals upcoming test speed
 measurement counters reset after conditioning
-whole-point efficiency >= P97
+throughput campaign stops below P85
+printing-accuracy boundary is read from FA2 at 97%
 measured temperature stays within D3
 conditioning efficiency stays above R85
 pulse-gap monitoring remains enabled
