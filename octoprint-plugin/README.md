@@ -7,7 +7,7 @@ It is material-agnostic. PLA, TPU, PET, PETG, ABS, ASA, nylon, nylon-CF/GF,
 PC, PEEK, and custom materials all use the same measurement engine. Material
 presets are only convenience starting points; every test window remains editable.
 
-## Version 0.2.1
+## Version 0.2.2
 
 The usable bench-controller release includes:
 
@@ -30,10 +30,10 @@ The usable bench-controller release includes:
 - saved-run browser with open, CSV download, JSON download, and delete;
 - interruption checkpointing on OctoPrint disconnect/error events;
 - pure-Python unit tests for grid expansion, telemetry parsing, flow conversion,
-  and point classification.
+  point classification, and UI resource discovery.
 
-Version 0.2.1 also converts an `FA7 tag=conditioning_limit` terminal record into
-a synthetic hard-failure point. The heatmap, JSON, and CSV therefore show the
+Version 0.2.1 converts an `FA7 tag=conditioning_limit` terminal record into a
+synthetic hard-failure point. The heatmap, JSON, and CSV therefore show the
 failed temperature/speed cell even when firmware correctly stops during the
 conditioning feed before an `FA2` measured point exists. The record includes:
 
@@ -44,6 +44,14 @@ failure_stage=CONDITIONING
 measurement_started=false
 ```
 
+Version 0.2.2 hardens OctoPrint UI loading:
+
+- the template and asset folders are resolved from the installed package path;
+- the tab template filename is supplied directly to OctoPrint;
+- the template no longer duplicates OctoPrint's generated tab wrapper ID;
+- startup logging prints the resolved template and asset folders;
+- the template contains `data-makeit-fa-ui-version="0.2.2"` for browser checks.
+
 The row-by-row runner avoids the firmware `M870` limit of 24 temperature rows.
 The plugin defaults allow up to 100 temperature values, 100 speed values, and
 2,000 total measured points. These are configurable safety ceilings, not
@@ -51,16 +59,27 @@ material constants.
 
 ## Install for development
 
-On the Raspberry Pi running OctoPrint:
+Use the Python environment that runs the OctoPrint service. On this project's
+OctoPi installation, systemd runs:
+
+```text
+/opt/octopi/oprint/bin/octoprint
+```
+
+Install with:
 
 ```bash
-cd ~/MAKEiT-Filament-Analyzer-Firmware/octoprint-plugin
-~/oprint/bin/pip install -e .
+cd ~/MAKEiT-Filament-Analyzer-Firmware
+git pull --ff-only
+/opt/octopi/oprint/bin/python -m pip install -e ./octoprint-plugin
 sudo systemctl restart octoprint
 ```
 
-If OctoPrint is not installed in `~/oprint`, use the `pip` executable belonging
-to the Python environment that runs OctoPrint.
+Confirm the installed package:
+
+```bash
+/opt/octopi/oprint/bin/python -m pip show OctoPrint-MAKEiT-Filament-Analyzer
+```
 
 The plugin appears as the **Filament Analyzer** tab.
 
@@ -69,11 +88,49 @@ The plugin appears as the **Filament Analyzer** tab.
 ```bash
 cd ~/MAKEiT-Filament-Analyzer-Firmware
 git pull --ff-only
-~/oprint/bin/pip install -e ./octoprint-plugin
+/opt/octopi/oprint/bin/python -m pip install -e ./octoprint-plugin
 sudo systemctl restart octoprint
 ```
 
 A browser hard refresh may be needed after JavaScript or CSS changes.
+
+## Blank-tab diagnostics
+
+Check startup and resolved resource paths:
+
+```bash
+sudo journalctl -u octoprint --since "2 minutes ago" --no-pager | \
+  grep -iE "makeit|filament analyzer|traceback|failed to load|error"
+```
+
+Expected startup text includes:
+
+```text
+MAKEiT Filament Analyzer controller 0.2.2 started
+```
+
+Check that OctoPrint serves the static JavaScript:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  http://127.0.0.1:5000/plugin/makeit_filament_analyzer/static/js/makeit_filament_analyzer.js
+```
+
+Expected HTTP status:
+
+```text
+200
+```
+
+Check whether the rendered OctoPrint page contains the tab and UI marker:
+
+```bash
+curl -s http://127.0.0.1:5000/ | \
+  grep -E "tab_plugin_makeit_filament_analyzer|makeit-fa-ui-version"
+```
+
+A logged-in browser may still be required to inspect the final rendered page if
+OctoPrint redirects unauthenticated requests to its login view.
 
 ## Test definition
 
