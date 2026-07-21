@@ -31,37 +31,28 @@ and 5 seconds at F600 before measurement.
 
 ## Two different flow limits
 
-A single pass threshold cannot answer both questions:
+Phase 11 separates the two questions:
 
 ```text
-printing-accuracy limit: commanded flow is reproduced within about 3%
-physical-throughput limit: filament still moves without severe slip or blockage
+P = printing-accuracy threshold
+R = hard throughput / rolling safety threshold
 ```
 
-Use `P97` for a narrow printing-accuracy refinement campaign. It stops as soon as
-whole-point efficiency falls below 97%.
+Use:
 
-Use `P85` for high-flow discovery. This allows the ladder to continue through
-moderate under-feed while `R85 K2`, pulse-gap monitoring, and the bounded segment
-horizon still stop a severe loss of motion. The `FA2 efficiency_pct` records then
-show where the curve crosses 97%, 95%, 90%, and 85%.
+```text
+P97 R85
+```
+
+A full-length point between 85% and 97% records the first printing-accuracy loss
+but no longer ends the ladder. An early rolling/pulse-gap stop or whole-point
+efficiency below 85% remains a hard `LIMIT_FOUND` result.
 
 The delivered flow estimate is:
 
 ```text
 Q_delivered = Q_commanded × efficiency_pct / 100
 ```
-
-The July 20 500 mm test at 180 C demonstrated why this distinction matters:
-
-```text
-F250: 10.02 mm3/s commanded × 97.23% = 9.74 mm3/s delivered
-F275: 11.03 mm3/s commanded × 96.06% = 10.59 mm3/s delivered
-```
-
-F275 failed a `P97` accuracy campaign even though it delivered more polymer per
-second. Stopping there is correct for accuracy mapping but wrong for discovering
-the extruder's maximum physical throughput.
 
 ## High-flow PLA profile
 
@@ -72,9 +63,10 @@ temperatures: 180, 190, 200, 210, 220 C
 feed ladder:  F300, F350, F400, F450, F500, F550, F600
 conditioning: 50 mm
 measurement:  200 mm
-hard pass:     P85
-thermal:      D3
-rolling:      W50 R85 K2
+accuracy:      P97
+hard stop:     R85 K2
+thermal:       D3 initially; D5 for 220 C throughput extension
+rolling:       W50
 ```
 
 For 1.75 mm filament:
@@ -97,33 +89,34 @@ changes whole-point efficiency by about 0.73 percentage points.
 ```gcode
 M881 P50
 M109 S190
-M872 J8100 F300 U600 V50 O10 L200 S0.35 B2 I250 \
-     C0.685 P85 D3 A1 W50 R85 K2 G4 H500 X2
+M872 J9100 F300 U600 V50 O10 L200 S0.35 B2 I250 \
+     C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
 ```
 
-Repeat at 200, 210, and 220 C using different campaign IDs. Run 180 C separately
-because its 97% printing-accuracy boundary is already known to lie between F250
-and F275.
+Repeat at 200, 210, and 220 C using different campaign IDs.
 
-After a throughput-discovery row, inspect every `FA2` record:
+New Phase-11 output reports both brackets:
 
 ```text
-efficiency >= 97%  accurate printing region
-efficiency 95–97%  marginal accuracy; possible slicer compensation region
-efficiency 85–95%  throughput discovery only; not a direct slicer limit
-efficiency < 85%   hard failure / stop region
+accuracy_last_pass
+accuracy_first_fail
+last_pass
+first_fail
 ```
+
+`accuracy_*` is the 97% printing bracket. `last_pass` / `first_fail` is the hard
+85% throughput bracket.
 
 If a row ends in `LIMIT_FOUND`, set the next-row target and perform recovery:
 
 ```gcode
 M109 S200
-M880 J8190 T220 O10 L50 F150 V100 U150 S0.35 B2 I250 \
+M880 J9190 T220 O10 L50 F150 V100 U150 S0.35 B2 I250 \
      C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
 ```
 
-Recovery validation remains `P97`; recovery should establish clean, accurate feed
-before another campaign begins.
+Recovery validation remains P97 because recovery should establish clean, accurate
+feed before another campaign begins.
 
 ## Full automatic envelope
 
@@ -133,11 +126,34 @@ Use only after disabling or extending the OctoPrint idle-heater timeout:
 M881 P50
 M109 S190
 M870 J9000 T220 E10 M220 Y1.75 F300 U600 V50 O10 L200 \
-     S0.35 B2 I250 C0.685 P85 D3 A1 W50 R85 K2 G4 H500 X2
+     S0.35 B2 I250 C0.685 P97 D3 A1 W50 R85 K2 G4 H500 X2
 ```
 
 Seven speed points plus one recovery slot give a row stride of eight. Four rows
 reserve IDs 9000–9031. Maximum normal filament use is 7000 mm.
+
+## July 20 measured high-flow map
+
+```text
+180 C: F375 accepted at 85.40%; F400 hard fail at 75.21%
+       delivered plateau about 12.8 mm3/s
+
+190 C: F400 accepted at 93.43%; F450 hard fail at 82.55%
+       delivered plateau about 15.0 mm3/s
+
+200 C: F500 accepted at 85.40%; F550 conditioning collapsed to 64.23%
+       delivered plateau about 17.1 mm3/s
+
+210 C: F550 accepted at 88.32%; F600 hard fail at 82.81%
+       delivered plateau about 19.5–20.0 mm3/s
+
+220 C: F600 delivered about 21.4 mm3/s at 89.05%
+       point was INVALID_TEMP only because minimum temperature reached 216.95 C,
+       0.05 C beyond D3. No hard flow limit was found.
+```
+
+For 220 C throughput extension, retest from F600 upward with D5 while keeping the
+measured minimum temperature as a separate heater-control constraint.
 
 ## Why the previous heater stopped
 
@@ -162,9 +178,9 @@ not itself turn off the heater.
 ```text
 conditioning speed equals upcoming test speed
 measurement counters reset after conditioning
-throughput campaign stops below P85
-printing-accuracy boundary is read from FA2 at 97%
-measured temperature stays within D3
+P97 records the printing-accuracy boundary
+R85 K2 remains the hard throughput / rolling stop
+measured temperature stays within the chosen D tolerance
 conditioning efficiency stays above R85
 pulse-gap monitoring remains enabled
 cancel commits no more than S0.35 x B2 = 0.70 mm
