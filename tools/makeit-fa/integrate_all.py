@@ -18,6 +18,7 @@ for script in (
     "integrate_phase10_conditioning_safe.py",
     "integrate_phase10_gcode_hooks.py",
     "integrate_phase10_host_stop.py",
+    "integrate_phase11_dual_thresholds.py",
 ):
     subprocess.check_call([sys.executable, str(HERE / script)])
 
