@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, Optional
 
 from . import (
@@ -58,6 +59,19 @@ def _conditioning_limit_point(
 
 
 class MakeItFilamentAnalyzerPluginV021(MakeItFilamentAnalyzerPlugin):
+    def on_after_startup(self) -> None:
+        self._stop_event.clear()
+        self._worker = threading.Thread(
+            target=self._worker_loop,
+            name="makeit-fa-worker",
+            daemon=True,
+        )
+        self._worker.start()
+        self._logger.info(
+            "MAKEiT Filament Analyzer controller %s started",
+            PLUGIN_VERSION,
+        )
+
     def _handle_row_terminal(self, state: str, fields: Dict[str, str]) -> None:
         synthetic_point: Optional[Dict[str, Any]] = None
 
