@@ -15,7 +15,7 @@ PLUGIN_VERSION = "0.2.1"
 
 
 def _conditioning_limit_point(
-    fields: Dict[str, str],
+    fields: Dict[str, Any],
     definition: Dict[str, Any],
     temperature_c: float,
 ) -> Dict[str, Any]:
@@ -54,8 +54,36 @@ def _conditioning_limit_point(
         "conditioning_mm": conditioning_mm,
         "conditioning_efficiency_pct": efficiency,
         "source_fields": dict(fields),
-        "raw": None,
+        "raw": fields.get("raw"),
     }
+
+
+def _append_conditioning_limit_points(state: Dict[str, Any]) -> int:
+    points = state.setdefault("points", [])
+    definition = state.get("definition") or {}
+    added = 0
+
+    for row in state.get("rows") or []:
+        if row.get("tag") != "conditioning_limit":
+            continue
+
+        feed = _float_field(row, "feed_mm_min") or 0.0
+        target = _float_field(row, "target")
+        if target is None:
+            target = _float_field(row, "temperature_c") or 0.0
+
+        duplicate = any(
+            abs(float(point.get("temperature_c", -1.0)) - target) < 0.0001
+            and abs(float(point.get("feed_mm_min", -1.0)) - feed) < 0.0001
+            for point in points
+        )
+        if duplicate:
+            continue
+
+        points.append(_conditioning_limit_point(row, definition, target))
+        added += 1
+
+    return added
 
 
 class MakeItFilamentAnalyzerPluginV021(MakeItFilamentAnalyzerPlugin):
@@ -71,6 +99,11 @@ class MakeItFilamentAnalyzerPluginV021(MakeItFilamentAnalyzerPlugin):
             "MAKEiT Filament Analyzer controller %s started",
             PLUGIN_VERSION,
         )
+
+    def _load_saved_run(self, run_id: int) -> Dict[str, Any]:
+        state = super()._load_saved_run(run_id)
+        _append_conditioning_limit_points(state)
+        return state
 
     def _handle_row_terminal(self, state: str, fields: Dict[str, str]) -> None:
         synthetic_point: Optional[Dict[str, Any]] = None
