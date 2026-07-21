@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "OctoPrint-MAKEiT-Filament-Analyzer"
-version = "0.2.1"
+version = "0.2.2"
 description = "Material-agnostic temperature and flow mapping for the MAKEiT filament analyzer firmware"
 readme = "README.md"
 requires-python = ">=3.9,<4"
