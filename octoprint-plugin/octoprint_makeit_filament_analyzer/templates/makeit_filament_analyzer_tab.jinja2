@@ -2,9 +2,12 @@
   <div class="makeit-fa-header">
     <div>
       <h3>MAKEiT Filament Analyzer</h3>
-      <p>Material-agnostic temperature × feed-speed mapping</p>
+      <p>Material-agnostic temperature × filament-feed mapping</p>
     </div>
-    <div class="makeit-fa-status" data-bind="text: status, css: statusClass"></div>
+    <div>
+      <div class="makeit-fa-status" data-bind="text: status, css: statusClass"></div>
+      <div class="makeit-fa-phase" data-bind="text: phase"></div>
+    </div>
   </div>
 
   <div class="makeit-fa-grid makeit-fa-grid-three">
@@ -20,11 +23,19 @@
         </select>
       </label>
       <label>Material / product<input type="text" data-bind="value: materialName"></label>
-      <label>Manufacturer<input type="text" data-bind="value: manufacturer"></label>
+      <div class="makeit-fa-row">
+        <label>Manufacturer<input type="text" data-bind="value: manufacturer"></label>
+        <label>Color<input type="text" data-bind="value: color"></label>
+      </div>
       <label>Lot / spool ID<input type="text" data-bind="value: lot"></label>
+      <div class="makeit-fa-row">
+        <label>Printer / bench<input type="text" data-bind="value: printerName"></label>
+        <label>Extruder / hotend<input type="text" data-bind="value: extruderName"></label>
+      </div>
       <div class="makeit-fa-row">
         <label>Filament Ø, mm<input type="number" step="0.01" data-bind="value: filamentDiameter"></label>
         <label>Nozzle Ø, mm<input type="number" step="0.05" data-bind="value: nozzleDiameter"></label>
+        <label>Nozzle material<input type="text" data-bind="value: nozzleMaterial"></label>
       </div>
       <label>Notes<textarea rows="3" data-bind="value: notes"></textarea></label>
     </section>
@@ -34,23 +45,37 @@
       <div class="makeit-fa-row">
         <label>Start, °C<input type="number" step="1" data-bind="value: temperatureStart"></label>
         <label>End, °C<input type="number" step="1" data-bind="value: temperatureEnd"></label>
-        <label>Step, °C<input type="number" step="0.5" data-bind="value: temperatureStep"></label>
+        <label>Step, °C<input type="number" step="1" data-bind="value: temperatureStep"></label>
       </div>
+
       <h4>Filament-feed grid</h4>
       <div class="makeit-fa-row">
         <label>Start, mm/min<input type="number" step="1" data-bind="value: speedStart"></label>
         <label>End, mm/min<input type="number" step="1" data-bind="value: speedEnd"></label>
         <label>Step, mm/min<input type="number" step="1" data-bind="value: speedStep"></label>
       </div>
+
       <div class="makeit-fa-row">
         <label>Conditioning, mm<input type="number" step="1" data-bind="value: conditioningMm"></label>
         <label>Measurement, mm<input type="number" step="10" data-bind="value: measurementMm"></label>
         <label>Settle, s<input type="number" step="1" data-bind="value: settleSeconds"></label>
       </div>
-      <div class="makeit-fa-row">
-        <label>Recovery, °C<input type="number" step="1" data-bind="value: recoveryTemp"></label>
-        <label>Temp tolerance, °C<input type="number" step="0.5" data-bind="value: temperatureTolerance"></label>
-      </div>
+      <label>Temperature tolerance, °C<input type="number" step="0.5" data-bind="value: temperatureTolerance"></label>
+
+      <details>
+        <summary>Recovery after a hard row limit</summary>
+        <p class="help-block">Set recovery temperature to 0 to disable automatic recovery.</p>
+        <div class="makeit-fa-row">
+          <label>Recovery, °C<input type="number" step="1" data-bind="value: recoveryTemp"></label>
+          <label>Prime, mm<input type="number" step="5" data-bind="value: recoveryPrimeMm"></label>
+          <label>Prime feed, mm/min<input type="number" step="5" data-bind="value: recoveryPrimeFeed"></label>
+        </div>
+        <div class="makeit-fa-row">
+          <label>Validation, mm<input type="number" step="5" data-bind="value: recoveryValidationMm"></label>
+          <label>Validation feed, mm/min<input type="number" step="5" data-bind="value: recoveryValidationFeed"></label>
+          <label>Validation P, %<input type="number" step="0.1" data-bind="value: recoveryAccuracy"></label>
+        </div>
+      </details>
     </section>
 
     <section class="makeit-fa-card">
@@ -67,6 +92,7 @@
         <label>Encoder events/mm<input type="number" step="0.001" data-bind="value: encoderCalibration"></label>
         <label>Segment, mm<input type="number" step="0.01" data-bind="value: segmentMm"></label>
       </div>
+
       <details>
         <summary>Advanced safety settings</summary>
         <div class="makeit-fa-row">
@@ -87,42 +113,65 @@
       <button class="btn" data-bind="click: validateGrid, enable: !busy()">Validate grid</button>
       <button class="btn btn-primary" data-bind="click: startRun, enable: canStart">Start test</button>
       <button class="btn btn-danger" data-bind="click: cancelRun, enable: isActive">Stop safely</button>
-      <button class="btn" data-bind="click: clearRun, enable: !isActive()">Clear</button>
+      <button class="btn" data-bind="click: clearRun, enable: !isActive()">Clear live view</button>
     </div>
     <div class="makeit-fa-error" data-bind="visible: error, text: error"></div>
+    <div class="makeit-fa-progress" data-bind="visible: preview">
+      <strong data-bind="text: progressText"></strong>
+    </div>
     <div class="makeit-fa-preview-values" data-bind="visible: preview">
       <span><strong data-bind="text: previewRows"></strong> temperature rows</span>
       <span><strong data-bind="text: previewColumns"></strong> speed columns</span>
-      <span><strong data-bind="text: previewPoints"></strong> points</span>
-      <span><strong data-bind="text: previewFilament"></strong> filament</span>
+      <span><strong data-bind="text: previewPoints"></strong> maximum points</span>
+      <span><strong data-bind="text: previewFilament"></strong> maximum filament</span>
       <span><strong data-bind="text: previewMinutes"></strong> minimum minutes</span>
-      <span><strong data-bind="text: previewCommandLength"></strong> command characters</span>
+      <span><strong data-bind="text: previewCommandLength"></strong> M872 characters</span>
+      <span><strong data-bind="text: previewRecoveryLength"></strong> M880 characters</span>
     </div>
     <pre class="makeit-fa-gcode" data-bind="visible: previewGcode, text: previewGcode"></pre>
+  </section>
+
+  <section class="makeit-fa-card">
+    <div class="makeit-fa-chart-header">
+      <h4>Temperature × speed heatmap</h4>
+      <select data-bind="value: chartMetric">
+        <option value="efficiency_pct">Efficiency, %</option>
+        <option value="delivered_flow_mm3_s">Delivered flow, mm³/s</option>
+        <option value="commanded_flow_mm3_s">Commanded flow, mm³/s</option>
+        <option value="temperature_min_c">Minimum temperature, °C</option>
+        <option value="temperature_droop_c">Temperature droop, °C</option>
+      </select>
+    </div>
+    <canvas id="makeit-fa-heatmap" width="1000" height="560"></canvas>
+    <div class="makeit-fa-legend">
+      <span>Gray: untested</span><span>Green: accurate</span>
+      <span>Amber: below P, above R</span><span>Red: hard failure</span>
+      <span>Purple: invalid temperature</span>
+    </div>
   </section>
 
   <div class="makeit-fa-grid makeit-fa-grid-two">
     <section class="makeit-fa-card">
       <div class="makeit-fa-chart-header">
-        <h4>Temperature × speed heatmap</h4>
-        <select data-bind="value: chartMetric">
-          <option value="efficiency_pct">Efficiency, %</option>
-          <option value="delivered_flow_mm3_s">Delivered flow, mm³/s</option>
-          <option value="commanded_flow_mm3_s">Commanded flow, mm³/s</option>
-          <option value="temperature_min_c">Minimum measured temperature, °C</option>
+        <h4>Flow boundaries versus temperature</h4>
+        <select data-bind="value: boundaryMetric">
+          <option value="feed">Filament feed, mm/min</option>
+          <option value="flow">Volumetric flow, mm³/s</option>
         </select>
       </div>
-      <canvas id="makeit-fa-heatmap" width="900" height="520"></canvas>
-      <div class="makeit-fa-legend">
-        <span>Gray: untested</span><span>Green: accurate</span><span>Amber: below P, above R</span><span>Red: hard failure</span>
-      </div>
+      <canvas id="makeit-fa-boundary" width="900" height="360"></canvas>
     </section>
 
     <section class="makeit-fa-card">
       <h4>Live measured points</h4>
       <div class="makeit-fa-table-wrap">
         <table class="table table-condensed table-striped">
-          <thead><tr><th>Temp</th><th>Feed</th><th>Commanded Q</th><th>Efficiency</th><th>Delivered Q</th><th>Class</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Temp</th><th>Feed</th><th>Commanded Q</th>
+              <th>Efficiency</th><th>Delivered Q</th><th>Min temp</th><th>Class</th>
+            </tr>
+          </thead>
           <tbody data-bind="foreach: points">
             <tr>
               <td data-bind="text: temperature_c"></td>
@@ -130,6 +179,7 @@
               <td data-bind="text: commanded_flow_mm3_s"></td>
               <td data-bind="text: efficiency_pct"></td>
               <td data-bind="text: delivered_flow_mm3_s"></td>
+              <td data-bind="text: temperature_min_c"></td>
               <td data-bind="text: classification, css: classification"></td>
             </tr>
           </tbody>
@@ -137,4 +187,40 @@
       </div>
     </section>
   </div>
+
+  <section class="makeit-fa-card">
+    <div class="makeit-fa-chart-header">
+      <h4>Saved runs</h4>
+      <button class="btn" data-bind="click: loadSavedRuns">Refresh</button>
+    </div>
+    <div class="makeit-fa-table-wrap">
+      <table class="table table-condensed table-striped">
+        <thead>
+          <tr>
+            <th>Date</th><th>Name</th><th>Material</th><th>Status</th>
+            <th>Points</th><th>Window</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody data-bind="foreach: savedRuns">
+          <tr>
+            <td data-bind="text: $parent.savedRunDate($data)"></td>
+            <td data-bind="text: run_name"></td>
+            <td><span data-bind="text: material_family"></span> <span data-bind="text: material_name"></span></td>
+            <td data-bind="text: status"></td>
+            <td data-bind="text: point_count"></td>
+            <td>
+              <span data-bind="text: temperature_start_c"></span>–<span data-bind="text: temperature_end_c"></span> °C,
+              F<span data-bind="text: speed_start_mm_min"></span>–F<span data-bind="text: speed_end_mm_min"></span>
+            </td>
+            <td class="makeit-fa-run-actions">
+              <button class="btn btn-mini" data-bind="click: $parent.loadSavedRun">Open</button>
+              <a class="btn btn-mini" data-bind="attr: {href: $parent.csvUrl($data)}">CSV</a>
+              <a class="btn btn-mini" data-bind="attr: {href: $parent.jsonUrl($data)}">JSON</a>
+              <button class="btn btn-mini btn-danger" data-bind="click: $parent.deleteSavedRun">Delete</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
 </div>
