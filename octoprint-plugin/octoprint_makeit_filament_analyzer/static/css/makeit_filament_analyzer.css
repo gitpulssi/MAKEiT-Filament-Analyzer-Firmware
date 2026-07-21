@@ -22,9 +22,15 @@
   margin-top: 0;
 }
 
-.makeit-fa-header p {
+.makeit-fa-header p,
+.makeit-fa-phase {
   color: #666;
   margin: 3px 0 0;
+}
+
+.makeit-fa-phase {
+  font-size: 11px;
+  text-align: center;
 }
 
 .makeit-fa-status {
@@ -32,10 +38,12 @@
   font-weight: 700;
   padding: 7px 13px;
   background: #e4e4e4;
+  text-align: center;
 }
 
 .makeit-fa-status.status-running,
-.makeit-fa-status.status-starting {
+.makeit-fa-status.status-starting,
+.makeit-fa-status.status-recovering {
   background: #d9edf7;
   color: #245269;
 }
@@ -49,7 +57,9 @@
 .makeit-fa-status.status-aborted,
 .makeit-fa-status.status-error,
 .makeit-fa-status.status-invalid_temp,
-.makeit-fa-status.status-recovery_failed {
+.makeit-fa-status.status-recovery_failed,
+.makeit-fa-status.status-interrupted,
+.makeit-fa-status.status-heater_disabled {
   background: #f2dede;
   color: #a94442;
 }
@@ -65,7 +75,7 @@
 }
 
 .makeit-fa-grid-two {
-  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 1fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(390px, 1fr);
 }
 
 .makeit-fa-card {
@@ -73,6 +83,7 @@
   border: 1px solid #d8d8d8;
   border-radius: 6px;
   box-sizing: border-box;
+  margin-bottom: 12px;
   padding: 14px;
 }
 
@@ -101,6 +112,18 @@
   min-width: 0;
 }
 
+.makeit-fa-card details {
+  border-top: 1px solid #eee;
+  margin-top: 10px;
+  padding-top: 8px;
+}
+
+.makeit-fa-card summary {
+  cursor: pointer;
+  font-weight: 700;
+  margin-bottom: 9px;
+}
+
 .makeit-fa-actions {
   flex-wrap: wrap;
   margin-bottom: 12px;
@@ -117,6 +140,10 @@
   padding: 6px 9px;
 }
 
+.makeit-fa-progress {
+  margin: 6px 0 10px;
+}
+
 .makeit-fa-error {
   background: #f2dede;
   border: 1px solid #ebccd1;
@@ -128,7 +155,7 @@
 }
 
 .makeit-fa-gcode {
-  max-height: 120px;
+  max-height: 150px;
   overflow: auto;
   white-space: pre-wrap;
 }
@@ -141,7 +168,8 @@
   width: auto;
 }
 
-#makeit-fa-heatmap {
+#makeit-fa-heatmap,
+#makeit-fa-boundary {
   border: 1px solid #ddd;
   display: block;
   max-width: 100%;
@@ -157,6 +185,14 @@
 .makeit-fa-table-wrap {
   max-height: 590px;
   overflow: auto;
+}
+
+.makeit-fa-run-actions {
+  white-space: nowrap;
+}
+
+.makeit-fa-run-actions .btn {
+  margin: 1px;
 }
 
 .makeit-fa td.ACCURATE {
@@ -189,5 +225,9 @@
   .makeit-fa-chart-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .makeit-fa-run-actions {
+    white-space: normal;
   }
 }
