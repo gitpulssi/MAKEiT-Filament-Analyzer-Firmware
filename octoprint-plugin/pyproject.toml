@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "OctoPrint-MAKEiT-Filament-Analyzer"
+version = "0.1.0"
+description = "Material-agnostic temperature and flow mapping for the MAKEiT filament analyzer firmware"
+readme = "README.md"
+requires-python = ">=3.9,<4"
+license = {text = "AGPL-3.0-or-later"}
+authors = [{name = "MAKEiT"}]
+dependencies = []
+
+[project.entry-points."octoprint.plugin"]
+makeit_filament_analyzer = "octoprint_makeit_filament_analyzer"
+
+[tool.setuptools]
+packages = ["octoprint_makeit_filament_analyzer"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+octoprint_makeit_filament_analyzer = [
+  "templates/*.jinja2",
+  "static/js/*.js",
+  "static/css/*.css"
+]
