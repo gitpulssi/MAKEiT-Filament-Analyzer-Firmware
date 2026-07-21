@@ -57,20 +57,23 @@ def load_patch_module():
 m = load_patch_module()
 
 
+def example_fields():
+    return {
+        "tag": "conditioning_limit",
+        "state": "LIMIT_FOUND",
+        "target": "200.00",
+        "temp": "199.39",
+        "feed_mm_min": "500.00",
+        "conditioning_mm": "50.00",
+        "conditioning_events": "24",
+        "conditioning_eff": "70.07",
+    }
+
+
 class ConditioningLimitTests(unittest.TestCase):
     def test_conditioning_limit_becomes_hard_failure_cell(self):
-        fields = {
-            "tag": "conditioning_limit",
-            "state": "LIMIT_FOUND",
-            "target": "200.00",
-            "temp": "199.39",
-            "feed_mm_min": "500.00",
-            "conditioning_mm": "50.00",
-            "conditioning_events": "24",
-            "conditioning_eff": "70.07",
-        }
         point = m._conditioning_limit_point(
-            fields,
+            example_fields(),
             {
                 "filament_diameter_mm": 1.75,
                 "encoder_events_per_mm": 0.685,
@@ -87,6 +90,23 @@ class ConditioningLimitTests(unittest.TestCase):
         self.assertAlmostEqual(point["efficiency_pct"], 70.07, places=2)
         self.assertAlmostEqual(point["commanded_flow_mm3_s"], 20.044, places=3)
         self.assertAlmostEqual(point["delivered_flow_mm3_s"], 14.045, places=3)
+
+    def test_saved_run_backfill_is_idempotent(self):
+        state = {
+            "definition": {
+                "filament_diameter_mm": 1.75,
+                "encoder_events_per_mm": 0.685,
+            },
+            "points": [],
+            "rows": [example_fields()],
+        }
+
+        self.assertEqual(m._append_conditioning_limit_points(state), 1)
+        self.assertEqual(len(state["points"]), 1)
+        self.assertEqual(state["points"][0]["result"], "CONDITIONING_LIMIT")
+
+        self.assertEqual(m._append_conditioning_limit_points(state), 0)
+        self.assertEqual(len(state["points"]), 1)
 
 
 if __name__ == "__main__":
