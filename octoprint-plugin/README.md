@@ -7,9 +7,9 @@ It is material-agnostic. PLA, TPU, PET, PETG, ABS, ASA, nylon, nylon-CF/GF,
 PC, PEEK, and custom materials all use the same measurement engine. Material
 presets are only convenience starting points; every test window remains editable.
 
-## Version 0.2.0
+## Version 0.2.1
 
-The first usable bench-controller release includes:
+The usable bench-controller release includes:
 
 - editable material, spool, printer, extruder, filament, and nozzle metadata;
 - adjustable temperature start, end, and step;
@@ -24,13 +24,25 @@ The first usable bench-controller release includes:
 - same-target heater keepalive during a supervised run;
 - non-blocking `FA*` telemetry queuing from OctoPrint's serial receive hook;
 - live measured-point table;
-- live temperature × speed heatmap;
+- live temperature x speed heatmap;
 - accurate-flow and hard-throughput boundary graph versus temperature;
 - JSON and tidy CSV checkpoints after every completed row;
 - saved-run browser with open, CSV download, JSON download, and delete;
 - interruption checkpointing on OctoPrint disconnect/error events;
 - pure-Python unit tests for grid expansion, telemetry parsing, flow conversion,
   and point classification.
+
+Version 0.2.1 also converts an `FA7 tag=conditioning_limit` terminal record into
+a synthetic hard-failure point. The heatmap, JSON, and CSV therefore show the
+failed temperature/speed cell even when firmware correctly stops during the
+conditioning feed before an `FA2` measured point exists. The record includes:
+
+```text
+result=CONDITIONING_LIMIT
+classification=HARD_THROUGHPUT_FAIL
+failure_stage=CONDITIONING
+measurement_started=false
+```
 
 The row-by-row runner avoids the firmware `M870` limit of 24 temperature rows.
 The plugin defaults allow up to 100 temperature values, 100 speed values, and
@@ -142,8 +154,8 @@ run-<id>.csv
 
 The JSON preserves the immutable test definition, firmware information,
 telemetry-derived points, completed row summaries, recovery summaries, raw
-telemetry, and terminal state. The CSV contains one row per measured
-temperature/speed point.
+telemetry, and terminal state. The CSV contains one row per measured or
+conditioning-limit temperature/speed point.
 
 ## Unit tests
 
@@ -159,7 +171,7 @@ python -m unittest discover -s tests -v
 Before unattended use:
 
 1. Install the plugin and confirm the tab and saved-run list load.
-2. Validate a 2 × 2 grid without starting.
+2. Validate a 2 x 2 grid without starting.
 3. Run a two-temperature, two-speed smoke test.
 4. Confirm heatmap cells and both saved files.
 5. Force a hard row limit and confirm `M880` recovery.
