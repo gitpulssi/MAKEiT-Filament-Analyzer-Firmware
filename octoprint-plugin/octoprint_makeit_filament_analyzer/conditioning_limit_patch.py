@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from . import (
     PLUGIN_ID,
@@ -11,7 +12,8 @@ from . import (
     _int_field,
 )
 
-PLUGIN_VERSION = "0.2.1"
+PLUGIN_VERSION = "0.2.2"
+PACKAGE_DIR = Path(__file__).resolve().parent
 
 
 def _conditioning_limit_point(
@@ -86,7 +88,25 @@ def _append_conditioning_limit_points(state: Dict[str, Any]) -> int:
     return added
 
 
-class MakeItFilamentAnalyzerPluginV021(MakeItFilamentAnalyzerPlugin):
+class MakeItFilamentAnalyzerPluginV022(MakeItFilamentAnalyzerPlugin):
+    """OctoPrint controller with deterministic UI resource locations."""
+
+    def get_asset_folder(self) -> str:
+        return str(PACKAGE_DIR / "static")
+
+    def get_template_folder(self) -> str:
+        return str(PACKAGE_DIR / "templates")
+
+    def get_template_configs(self) -> List[Dict[str, Any]]:
+        return [
+            dict(
+                type="tab",
+                name="Filament Analyzer",
+                template="makeit_filament_analyzer_tab.jinja2",
+                custom_bindings=True,
+            )
+        ]
+
     def on_after_startup(self) -> None:
         self._stop_event.clear()
         self._worker = threading.Thread(
@@ -96,8 +116,10 @@ class MakeItFilamentAnalyzerPluginV021(MakeItFilamentAnalyzerPlugin):
         )
         self._worker.start()
         self._logger.info(
-            "MAKEiT Filament Analyzer controller %s started",
+            "MAKEiT Filament Analyzer controller %s started; template=%s; assets=%s",
             PLUGIN_VERSION,
+            self.get_template_folder(),
+            self.get_asset_folder(),
         )
 
     def _load_saved_run(self, run_id: int) -> Dict[str, Any]:
@@ -152,7 +174,7 @@ __plugin_pythoncompat__ = ">=3.9,<4"
 
 def __plugin_load__() -> None:
     global __plugin_implementation__
-    __plugin_implementation__ = MakeItFilamentAnalyzerPluginV021()
+    __plugin_implementation__ = MakeItFilamentAnalyzerPluginV022()
 
     global __plugin_hooks__
     __plugin_hooks__ = {
