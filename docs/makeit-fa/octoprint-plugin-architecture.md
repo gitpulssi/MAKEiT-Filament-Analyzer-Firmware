@@ -15,7 +15,7 @@ conditioning length, tolerances, and thresholds are runtime inputs.
 ### Marlin
 
 - Execute bounded segmented E motion.
-- Count encoder events and executed motion.
+- Count filament encoder events and executed motion.
 - Measure whole-point and rolling efficiency.
 - Track temperature statistics and pulse gaps.
 - Enforce graceful abort and bounded committed distance.
@@ -28,14 +28,15 @@ conditioning length, tolerances, and thresholds are runtime inputs.
 
 - Let the user choose all temperature and speed grid limits and steps.
 - Validate the requested grid before starting.
-- Estimate test duration and filament consumption.
+- Estimate test duration and maximum filament consumption.
 - Run one temperature row at a time with `M872` so the host retains control.
 - Refresh the active heater target periodically while a bench run is active, so
   unrelated host idle-heater timers cannot terminate a supervised test.
 - Parse firmware telemetry without blocking OctoPrint's serial receive loop.
-- Persist every point and run as JSON and CSV.
-- Resume or safely terminate interrupted runs.
-- Render a temperature x speed heatmap and derived flow curves.
+- Persist every completed row as JSON and tidy CSV.
+- Render a temperature × speed heatmap and derived boundary curves.
+- Browse, reopen, download, and delete saved runs.
+- Mark active tests interrupted if OctoPrint disconnects or reports a connection error.
 
 ## User-adjustable experiment definition
 
@@ -48,6 +49,7 @@ manufacturer / product / color / lot / notes
 filament diameter
 nozzle diameter and nozzle material
 extruder / hotend identifier
+printer / test-bench identifier
 encoder calibration
 
 temperature start / end / step
@@ -60,7 +62,9 @@ hard throughput threshold R
 temperature tolerance
 rolling window length and confirmation count
 pulse-gap settings
-recovery temperature and recovery point settings
+recovery temperature
+recovery prime length and feed
+recovery validation length, feed, and accuracy threshold
 ```
 
 Material presets are convenience templates only. Every field remains editable.
@@ -72,7 +76,7 @@ The plugin expands both inclusive ranges before sending any G-code.
 ```text
 temperatures = inclusive_grid(temp_start, temp_end, temp_step)
 speeds       = inclusive_grid(speed_start, speed_end, speed_step)
-points       = len(temperatures) x len(speeds)
+points       = len(temperatures) × len(speeds)
 ```
 
 Reject a run when:
@@ -81,34 +85,39 @@ Reject a run when:
 - a range contains a non-finite value;
 - a temperature is outside the configured machine safety limits;
 - the speed exceeds the configured machine/extruder limit;
-- a point length or conditioning length is invalid;
+- conditioning is neither zero nor at least the firmware's 10 mm minimum;
+- measured length cannot contain the requested rolling windows;
 - the requested grid exceeds a configurable point-count ceiling;
-- the estimated filament consumption exceeds the user-confirmation threshold;
+- a generated M872 or M880 command exceeds Marlin's 191-character payload limit;
 - OctoPrint is printing, paused, disconnected, or not operational.
 
-The UI shows rows, columns, total points, estimated filament use, and estimated
-minimum duration before enabling Start.
+The UI shows rows, columns, maximum points, estimated maximum filament use,
+estimated minimum duration, and command lengths before enabling Start.
 
 ## Execution model
 
-The plugin should orchestrate one fixed-temperature `M872` row at a time instead
-of relying exclusively on a long `M870` envelope.
+The plugin orchestrates one fixed-temperature `M872` row at a time instead of
+relying on one long `M870` envelope. This avoids the firmware's 24-row retained
+result array and supports up to the configurable plugin limit.
 
 ```text
-SET_TEMP -> WAIT_TEMP -> RUN_ROW -> OPTIONAL_RECOVERY -> NEXT_TEMP
+SET_TEMP -> WAIT_TEMP -> RUN_ROW -> CHECKPOINT -> OPTIONAL_RECOVERY -> NEXT_TEMP
 ```
 
 For each temperature:
 
-1. Send `M881 P<conditioning_mm>`.
+1. Send `M881 P<conditioning_mm>` once for the run.
 2. Send `M109 S<temperature>`.
 3. Send one `M872` command using the selected speed range and resolution.
-4. Parse all `FA2` point records and `FA7` campaign records.
-5. On a hard limit, optionally run `M880` recovery before the next row.
-6. Persist the completed row before continuing.
+4. Parse all `FA2` point records and the terminal `FA7` campaign record.
+5. Write JSON and CSV checkpoints.
+6. On a hard limit, optionally run `M880` recovery before the next row.
+7. Advance to the next user-selected temperature.
 
 The plugin periodically resends `M104 S<active_target>` while a supervised run is
-active. This is a same-target keepalive, not a temperature change.
+active. This is a same-target keepalive, not a temperature change. Keepalive timing
+is reset at every row and recovery transition so it cannot overwrite the return
+target used by M880.
 
 ## Data model
 
@@ -127,21 +136,22 @@ Each measured point is stored independently:
   "temperature_avg_c": 219.1,
   "temperature_min_c": 217.4,
   "temperature_max_c": 220.2,
+  "temperature_droop_c": 2.6,
   "result": "LOW_FEED",
-  "accuracy_class": "BELOW_ACCURACY_ABOVE_THROUGHPUT",
-  "point_crc": 0
+  "classification": "BELOW_ACCURACY_ABOVE_THROUGHPUT"
 }
 ```
 
-The original telemetry line is retained for auditability.
+The original telemetry line is retained in JSON for auditability. CSV contains one
+row per measured temperature/speed point.
 
 ## Visualization
 
-The primary graph is a heatmap:
+The primary graph is a measured-cell heatmap:
 
 ```text
 X axis: temperature (C)
-Y axis: filament feed speed (mm/min) or commanded flow (mm3/s)
+Y axis: filament feed speed (mm/min)
 cell color: selected metric
 ```
 
@@ -149,60 +159,67 @@ Selectable cell metrics:
 
 - measured efficiency percent;
 - delivered volumetric flow;
-- temperature droop;
-- pass class;
-- rolling-window minimum efficiency.
+- commanded volumetric flow;
+- minimum measured temperature;
+- temperature droop.
 
-Overlays:
+Classification colors identify accurate, below-accuracy/above-throughput, hard
+failure, invalid-temperature, aborted, and untested cells.
 
-- 97% printing-accuracy boundary;
-- hard throughput boundary;
-- untested cells;
-- invalid-temperature cells;
-- interrupted points.
+The secondary graph plots versus temperature:
 
-Secondary charts:
+- highest feed/flow that remained at or above P;
+- highest feed/flow accepted before the hard R boundary.
 
-- delivered flow versus commanded flow at each temperature;
-- maximum accurate flow versus temperature;
-- maximum hard throughput versus temperature;
-- temperature droop versus flow.
+No interpolation is required for raw-data mode. Optional contours or smoothing
+must be clearly labeled and never replace measured cells.
 
-No interpolation is required for raw-data mode. Optional contour/smoothing must be
-clearly labeled and never replace the measured cells.
+## Persistence and exports
 
-## Exports
+Every active run is checkpointed after each completed row and recovery. A terminal
+run is checkpointed again with its final state.
 
-Every run can export:
+```text
+~/.octoprint/data/makeit_filament_analyzer/run-<id>.json
+~/.octoprint/data/makeit_filament_analyzer/run-<id>.csv
+```
 
-- complete JSON including definition, firmware version, machine metadata, raw
-  telemetry, points, rows, CRCs, and timestamps;
-- tidy CSV with one row per temperature/speed point;
-- PNG/SVG graph export from the browser;
-- a compact material profile containing conservative slicer flow limits.
+The UI can:
 
-## Initial OctoPrint plugin mixins and hooks
+- list saved runs;
+- reopen a saved run and redraw its graphs;
+- download JSON;
+- download CSV;
+- delete both files for a run.
 
-Use:
+## OctoPrint integration
 
-- `StartupPlugin`
-- `SettingsPlugin`
-- `TemplatePlugin`
-- `AssetPlugin`
-- `SimpleApiPlugin`
-- `EventHandlerPlugin`
-- `octoprint.comm.protocol.gcode.received`
+Version 0.2.0 uses:
 
-The receive hook only parses and queues matching telemetry. It must return the
-original line immediately. A background worker updates run state, writes files,
-and sends plugin messages to the browser.
+- `StartupPlugin`;
+- `ShutdownPlugin`;
+- `SettingsPlugin`;
+- `TemplatePlugin`;
+- `AssetPlugin`;
+- `SimpleApiPlugin`;
+- `EventHandlerPlugin`;
+- `octoprint.comm.protocol.gcode.received`;
+- `octoprint.comm.protocol.firmware.info`.
 
-## Development phases
+The receive hook only checks the prefix and queues matching telemetry. It returns
+the original line immediately. A background worker parses telemetry, updates run
+state, writes files, and sends plugin messages to the browser.
 
-1. Installable plugin shell, adjustable grid form, validation, and G-code preview.
-2. Telemetry parser and live point table.
-3. Row-by-row automatic runner with cancel and heater keepalive.
-4. Persistent JSON/CSV datasets and run browser.
-5. Heatmap and derived boundary plots.
-6. Recovery orchestration, interrupted-run handling, and resume support.
-7. Material preset templates and slicer-profile export.
+## Validation status
+
+The v0.2.0 package has passed:
+
+- Python syntax compilation;
+- JavaScript syntax checking;
+- wheel construction;
+- 11 unit tests covering grid expansion, telemetry parsing, volumetric conversion,
+  and dual-threshold point classification.
+
+It still requires integration testing on the target OctoPrint instance, including
+a 2 × 2 smoke test, recovery transition, cancellation in each active phase, and
+connection-interruption checkpointing.
