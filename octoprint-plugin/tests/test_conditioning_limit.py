@@ -108,6 +108,27 @@ class ConditioningLimitTests(unittest.TestCase):
         self.assertEqual(m._append_conditioning_limit_points(state), 0)
         self.assertEqual(len(state["points"]), 1)
 
+    def test_ui_resource_paths_and_template_config(self):
+        plugin = m.MakeItFilamentAnalyzerPluginV022()
+        asset_folder = pathlib.Path(plugin.get_asset_folder())
+        template_folder = pathlib.Path(plugin.get_template_folder())
+        configs = plugin.get_template_configs()
+
+        self.assertTrue((asset_folder / "js" / "makeit_filament_analyzer.js").is_file())
+        self.assertTrue((asset_folder / "css" / "makeit_filament_analyzer.css").is_file())
+        self.assertTrue((template_folder / "makeit_filament_analyzer_tab.jinja2").is_file())
+        self.assertEqual(len(configs), 1)
+        self.assertEqual(configs[0]["type"], "tab")
+        self.assertEqual(configs[0]["template"], "makeit_filament_analyzer_tab.jinja2")
+        self.assertTrue(configs[0]["custom_bindings"])
+
+    def test_template_does_not_duplicate_octoprint_tab_wrapper_id(self):
+        template = (
+            PACKAGE_DIR / "templates" / "makeit_filament_analyzer_tab.jinja2"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('id="tab_plugin_makeit_filament_analyzer"', template)
+        self.assertIn('data-makeit-fa-ui-version="0.2.2"', template)
+
 
 if __name__ == "__main__":
     unittest.main()
