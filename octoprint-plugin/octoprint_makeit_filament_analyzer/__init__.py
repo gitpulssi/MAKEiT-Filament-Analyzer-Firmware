@@ -8,7 +8,7 @@ import queue
 import re
 import threading
 import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import flask
 import octoprint.plugin
@@ -16,16 +16,15 @@ import octoprint.plugin
 
 PLUGIN_ID = "makeit_filament_analyzer"
 KV_RE = re.compile(r"([A-Za-z0-9_]+)=([^\s]+)")
-TELEMETRY_PREFIXES = ("FA1:", "FA2:", "FA3:", "FA4:", "FA7:", "FA8:", "FA8ROW:", "FA9:", "FA10:", "FATX:")
-TERMINAL_FA8_TAGS = {
-    "complete",
-    "limit_found",
-    "recovery_failed",
-    "invalid_temp",
-    "aborted",
-    "heater_disabled",
-    "error",
+TELEMETRY_PREFIXES = (
+    "FA1:", "FA2:", "FA3:", "FA4:", "FA7:", "FA8:",
+    "FA8ROW:", "FA9:", "FA10:", "FATX:",
+)
+ROW_TERMINAL_TAGS = {
+    "max_reached", "limit_found", "invalid_temp", "aborted",
+    "heater_disabled", "point_error", "transaction_state_error",
 }
+RECOVERY_TERMINAL_STATES = {"COMPLETE", "FAILED", "ABORTED", "ERROR"}
 
 
 class ValidationError(ValueError):
@@ -49,10 +48,10 @@ def _number(data: Dict[str, Any], key: str, *, minimum: Optional[float] = None,
 
 def _integer(data: Dict[str, Any], key: str, *, minimum: int, maximum: int) -> int:
     value = _number(data, key, minimum=float(minimum), maximum=float(maximum))
-    rounded = int(round(value))
-    if abs(value - rounded) > 1e-9:
+    result = int(round(value))
+    if abs(value - result) > 1e-9:
         raise ValidationError(f"{key} must be an integer")
-    return rounded
+    return result
 
 
 def _inclusive_grid(start: float, end: float, step: float, limit: int) -> List[float]:
@@ -61,9 +60,9 @@ def _inclusive_grid(start: float, end: float, step: float, limit: int) -> List[f
     if end < start:
         raise ValidationError("grid end must be greater than or equal to grid start")
     count = int(math.floor((end - start) / step + 1e-9)) + 1
-    if count < 1 or count > limit:
-        raise ValidationError(f"grid contains {count} values; limit is {limit}")
     values = [start + index * step for index in range(count)]
+    if not values:
+        values = [start]
     if values[-1] < end - max(1e-6, step * 1e-6):
         values.append(end)
     if len(values) > limit:
@@ -76,8 +75,7 @@ def _fmt(value: float) -> str:
 
 
 def _flow_mm3_s(feed_mm_min: float, filament_diameter_mm: float) -> float:
-    area = math.pi * filament_diameter_mm * filament_diameter_mm / 4.0
-    return feed_mm_min * area / 60.0
+    return feed_mm_min * math.pi * filament_diameter_mm * filament_diameter_mm / 240.0
 
 
 def _parse_fields(line: str) -> Tuple[str, Dict[str, str]]:
@@ -119,9 +117,15 @@ class MakeItFilamentAnalyzerPlugin(
     def _empty_state() -> Dict[str, Any]:
         return {
             "status": "IDLE",
+            "phase": "IDLE",
             "run_id": None,
             "definition": None,
             "preview": None,
+            "temperatures": [],
+            "speeds_mm_min": [],
+            "temperature_index": 0,
+            "current_campaign_id": None,
+            "current_recovery_id": None,
             "points": [],
             "rows": [],
             "raw": [],
@@ -156,11 +160,7 @@ class MakeItFilamentAnalyzerPlugin(
 
     def on_after_startup(self) -> None:
         self._stop_event.clear()
-        self._worker = threading.Thread(
-            target=self._worker_loop,
-            name="makeit-fa-worker",
-            daemon=True,
-        )
+        self._worker = threading.Thread(target=self._worker_loop, name="makeit-fa-worker", daemon=True)
         self._worker.start()
         self._logger.info("MAKEiT Filament Analyzer experiment controller started")
 
@@ -170,12 +170,7 @@ class MakeItFilamentAnalyzerPlugin(
             self._worker.join(timeout=3.0)
 
     def get_api_commands(self) -> Dict[str, List[str]]:
-        return {
-            "validate": ["definition"],
-            "start": ["definition"],
-            "cancel": [],
-            "clear": [],
-        }
+        return {"validate": ["definition"], "start": ["definition"], "cancel": [], "clear": []}
 
     def is_api_protected(self) -> bool:
         return True
@@ -195,7 +190,7 @@ class MakeItFilamentAnalyzerPlugin(
                 return self._api_cancel()
             if command == "clear":
                 with self._lock:
-                    if self._state["status"] in ("STARTING", "RUNNING", "CANCELLING"):
+                    if self._is_active_locked():
                         raise ValidationError("cannot clear an active run")
                     self._state = self._empty_state()
                 self._publish()
@@ -204,19 +199,21 @@ class MakeItFilamentAnalyzerPlugin(
             return flask.jsonify(valid=False, error=str(exc)), 400
         return flask.jsonify(error=f"unsupported command {command}"), 400
 
+    def _is_active_locked(self) -> bool:
+        return self._state["status"] in ("STARTING", "RUNNING", "RECOVERING", "CANCELLING")
+
     def _validate_definition(self, raw: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         if not isinstance(raw, dict):
             raise ValidationError("definition must be an object")
 
-        settings = self._settings
-        machine_min_temp = float(settings.get(["machine_min_temp_c"]))
-        machine_max_temp = float(settings.get(["machine_max_temp_c"]))
-        machine_max_feed = float(settings.get(["machine_max_feed_mm_min"]))
-        max_temp_points = int(settings.get(["max_temperature_points"]))
-        max_speed_points = int(settings.get(["max_speed_points"]))
-        max_total_points = int(settings.get(["max_total_points"]))
+        machine_min_temp = float(self._settings.get(["machine_min_temp_c"]))
+        machine_max_temp = float(self._settings.get(["machine_max_temp_c"]))
+        machine_max_feed = float(self._settings.get(["machine_max_feed_mm_min"]))
+        max_temp_points = int(self._settings.get(["max_temperature_points"]))
+        max_speed_points = int(self._settings.get(["max_speed_points"]))
+        max_total_points = int(self._settings.get(["max_total_points"]))
 
-        definition: Dict[str, Any] = {
+        d: Dict[str, Any] = {
             "run_name": str(raw.get("run_name") or "Filament test").strip()[:120],
             "material_family": str(raw.get("material_family") or "Custom").strip()[:80],
             "material_name": str(raw.get("material_name") or "").strip()[:160],
@@ -248,67 +245,73 @@ class MakeItFilamentAnalyzerPlugin(
             "pulse_gap_missing_events": _number(raw, "pulse_gap_missing_events", minimum=0.5, maximum=20.0),
             "recovery_temp_c": _number(raw, "recovery_temp_c", minimum=machine_min_temp, maximum=machine_max_temp),
         }
-
-        if definition["throughput_threshold_pct"] > definition["accuracy_threshold_pct"]:
+        if d["throughput_threshold_pct"] > d["accuracy_threshold_pct"]:
             raise ValidationError("throughput threshold R cannot exceed accuracy threshold P")
 
-        temperatures = _inclusive_grid(
-            definition["temperature_start_c"],
-            definition["temperature_end_c"],
-            definition["temperature_step_c"],
-            max_temp_points,
-        )
-        speeds = _inclusive_grid(
-            definition["speed_start_mm_min"],
-            definition["speed_end_mm_min"],
-            definition["speed_step_mm_min"],
-            max_speed_points,
-        )
+        temperatures = _inclusive_grid(d["temperature_start_c"], d["temperature_end_c"], d["temperature_step_c"], max_temp_points)
+        speeds = _inclusive_grid(d["speed_start_mm_min"], d["speed_end_mm_min"], d["speed_step_mm_min"], max_speed_points)
         total_points = len(temperatures) * len(speeds)
         if total_points > max_total_points:
             raise ValidationError(f"grid contains {total_points} points; limit is {max_total_points}")
 
-        filament_mm = total_points * (definition["conditioning_mm"] + definition["measurement_mm"])
-        motion_seconds = 0.0
-        for _temperature in temperatures:
-            motion_seconds += definition["settle_seconds"]
-            for speed in speeds:
-                motion_seconds += 60.0 * (definition["conditioning_mm"] + definition["measurement_mm"]) / speed
-        # Heating/cooling cannot be predicted accurately; expose motion+dwell as a lower bound.
+        filament_mm = total_points * (d["conditioning_mm"] + d["measurement_mm"])
+        motion_seconds = sum(
+            d["settle_seconds"] + sum(60.0 * (d["conditioning_mm"] + d["measurement_mm"]) / speed for speed in speeds)
+            for _temperature in temperatures
+        )
         preview = {
             "temperatures": temperatures,
             "speeds_mm_min": speeds,
-            "speeds_mm3_s": [round(_flow_mm3_s(speed, definition["filament_diameter_mm"]), 4) for speed in speeds],
+            "speeds_mm3_s": [round(_flow_mm3_s(speed, d["filament_diameter_mm"]), 4) for speed in speeds],
             "rows": len(temperatures),
             "columns": len(speeds),
             "total_points": total_points,
             "estimated_filament_mm": round(filament_mm, 1),
             "estimated_minimum_minutes": round(motion_seconds / 60.0, 1),
-            "requires_filament_confirmation": filament_mm >= float(settings.get(["filament_confirmation_mm"])),
+            "requires_filament_confirmation": filament_mm >= float(self._settings.get(["filament_confirmation_mm"])),
         }
-
-        command = self._build_envelope_command(definition, run_id=4294960000)
-        preview["gcode"] = command
+        command = self._build_row_command(d, campaign_id=4000000000)
+        preview["gcode"] = f"M109 S{_fmt(temperatures[0])}\n{command}\n... repeated for {len(temperatures)} temperature rows"
         preview["gcode_length"] = len(command)
         if len(command) > 191:
-            raise ValidationError(f"generated M870 command is {len(command)} characters; firmware limit is 191")
+            raise ValidationError(f"generated M872 command is {len(command)} characters; firmware limit is 191")
+        return d, preview
 
-        return definition, preview
-
-    def _build_envelope_command(self, d: Dict[str, Any], run_id: int) -> str:
+    def _build_row_command(self, d: Dict[str, Any], campaign_id: int) -> str:
         return (
-            f"M870 J{run_id} T{_fmt(d['temperature_end_c'])} "
-            f"E{_fmt(d['temperature_step_c'])} M{_fmt(d['recovery_temp_c'])} "
-            f"Y{_fmt(d['filament_diameter_mm'])} F{_fmt(d['speed_start_mm_min'])} "
-            f"U{_fmt(d['speed_end_mm_min'])} V{_fmt(d['speed_step_mm_min'])} "
-            f"O{d['settle_seconds']} L{_fmt(d['measurement_mm'])} "
+            f"M872 J{campaign_id} F{_fmt(d['speed_start_mm_min'])} U{_fmt(d['speed_end_mm_min'])} "
+            f"V{_fmt(d['speed_step_mm_min'])} O{d['settle_seconds']} L{_fmt(d['measurement_mm'])} "
             f"S{_fmt(d['segment_mm'])} B{d['max_inflight']} I{d['report_ms']} "
             f"C{_fmt(d['encoder_events_per_mm'])} P{_fmt(d['accuracy_threshold_pct'])} "
             f"D{_fmt(d['temperature_tolerance_c'])} A1 W{_fmt(d['rolling_window_mm'])} "
             f"R{_fmt(d['throughput_threshold_pct'])} K{d['rolling_confirm_windows']} "
-            f"G{_fmt(d['pulse_gap_factor'])} H{d['pulse_gap_min_ms']} "
-            f"X{_fmt(d['pulse_gap_missing_events'])}"
+            f"G{_fmt(d['pulse_gap_factor'])} H{d['pulse_gap_min_ms']} X{_fmt(d['pulse_gap_missing_events'])}"
         )
+
+    def _build_recovery_command(self, d: Dict[str, Any], recovery_id: int) -> str:
+        prime_mm = min(100.0, max(5.0, d["conditioning_mm"]))
+        prime_feed = min(500.0, max(1.0, d["speed_start_mm_min"]))
+        validate_mm = min(100.0, max(20.0, d["rolling_window_mm"]))
+        return (
+            f"M880 J{recovery_id} T{_fmt(d['recovery_temp_c'])} O{d['settle_seconds']} "
+            f"L{_fmt(prime_mm)} F{_fmt(prime_feed)} V{_fmt(validate_mm)} U{_fmt(prime_feed)} "
+            f"S{_fmt(d['segment_mm'])} B{d['max_inflight']} I{d['report_ms']} "
+            f"C{_fmt(d['encoder_events_per_mm'])} P{_fmt(d['accuracy_threshold_pct'])} "
+            f"D{_fmt(d['temperature_tolerance_c'])} A1 W{_fmt(min(validate_mm, d['rolling_window_mm']))} "
+            f"R{_fmt(d['throughput_threshold_pct'])} K{d['rolling_confirm_windows']} "
+            f"G{_fmt(d['pulse_gap_factor'])} H{d['pulse_gap_min_ms']} X{_fmt(d['pulse_gap_missing_events'])}"
+        )
+
+    def _campaign_id(self, temperature_index: int) -> int:
+        with self._lock:
+            run_id = int(self._state["run_id"])
+            speed_count = len(self._state["speeds_mm_min"])
+        return run_id + temperature_index * (speed_count + 2)
+
+    def _recovery_id(self, temperature_index: int) -> int:
+        with self._lock:
+            speed_count = len(self._state["speeds_mm_min"])
+        return self._campaign_id(temperature_index) + speed_count + 1
 
     def _api_start(self, raw_definition: Any) -> flask.Response:
         if not self._printer.is_operational():
@@ -316,48 +319,74 @@ class MakeItFilamentAnalyzerPlugin(
         if self._printer.is_printing() or self._printer.is_paused():
             raise ValidationError("a print job is active")
         with self._lock:
-            if self._state["status"] in ("STARTING", "RUNNING", "CANCELLING"):
+            if self._is_active_locked():
                 raise ValidationError("an analyzer run is already active")
 
         definition, preview = self._validate_definition(raw_definition)
-        run_id = int(time.time()) & 0xFFFFFFFF
-        command = self._build_envelope_command(definition, run_id)
-        now = time.time()
+        run_id = int(time.time()) & 0x7FFFFFFF
         with self._lock:
             self._state = self._empty_state()
             self._state.update(
-                status="STARTING",
-                run_id=run_id,
-                definition=definition,
-                preview=preview,
-                active_target_c=definition["temperature_start_c"],
-                started_at=now,
+                status="STARTING", phase="STARTING", run_id=run_id,
+                definition=definition, preview=preview,
+                temperatures=list(preview["temperatures"]),
+                speeds_mm_min=list(preview["speeds_mm_min"]),
+                started_at=time.time(),
             )
-
-        self._printer.commands([
-            f"M881 P{_fmt(definition['conditioning_mm'])}",
-            f"M109 S{_fmt(definition['temperature_start_c'])}",
-            command,
-        ], tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
-        with self._lock:
-            self._state["status"] = "RUNNING"
-            self._last_keepalive_monotonic = time.monotonic()
-        self._publish()
+        self._printer.commands([f"M881 P{_fmt(definition['conditioning_mm'])}"], tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
+        self._start_row(0)
         return flask.jsonify(ok=True, run_id=run_id, preview=preview)
+
+    def _start_row(self, temperature_index: int) -> None:
+        with self._lock:
+            if self._state["status"] == "CANCELLING":
+                return
+            d = copy.deepcopy(self._state["definition"])
+            temperature = float(self._state["temperatures"][temperature_index])
+            campaign_id = self._campaign_id(temperature_index)
+            self._state.update(
+                status="RUNNING", phase="RUN_ROW", temperature_index=temperature_index,
+                current_campaign_id=campaign_id, current_recovery_id=None,
+                active_target_c=temperature,
+            )
+            self._last_keepalive_monotonic = time.monotonic()
+        self._printer.commands([
+            f"M109 S{_fmt(temperature)}",
+            self._build_row_command(d, campaign_id),
+        ], tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
+        self._publish()
+
+    def _start_recovery(self, next_temperature_index: int) -> None:
+        with self._lock:
+            if self._state["status"] == "CANCELLING":
+                return
+            d = copy.deepcopy(self._state["definition"])
+            next_temperature = float(self._state["temperatures"][next_temperature_index])
+            recovery_id = self._recovery_id(next_temperature_index - 1)
+            self._state.update(
+                status="RECOVERING", phase="RECOVERING",
+                current_recovery_id=recovery_id, active_target_c=d["recovery_temp_c"],
+            )
+        self._printer.commands([
+            f"M104 S{_fmt(next_temperature)}",
+            self._build_recovery_command(d, recovery_id),
+        ], tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
+        self._publish()
 
     def _api_cancel(self) -> flask.Response:
         with self._lock:
-            run_id = self._state.get("run_id")
-            active = self._state["status"] in ("STARTING", "RUNNING", "CANCELLING")
-            if active:
-                self._state["status"] = "CANCELLING"
-        if not active:
-            raise ValidationError("no analyzer run is active")
-        self._printer.commands([
-            f"M870 Z J{run_id}",
-            "M879",
-            "M104 S0",
-        ], tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
+            if not self._is_active_locked():
+                raise ValidationError("no analyzer run is active")
+            campaign_id = self._state.get("current_campaign_id")
+            recovery_id = self._state.get("current_recovery_id")
+            self._state.update(status="CANCELLING", phase="CANCELLING")
+        commands: List[str] = []
+        if campaign_id is not None:
+            commands.append(f"M872 Z J{campaign_id}")
+        if recovery_id is not None:
+            commands.append(f"M880 Z J{recovery_id}")
+        commands.extend(["M879", "M104 S0"])
+        self._printer.commands(commands, tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
         self._publish()
         return flask.jsonify(ok=True)
 
@@ -386,27 +415,27 @@ class MakeItFilamentAnalyzerPlugin(
 
     def _service_keepalive(self) -> None:
         with self._lock:
-            if self._state["status"] != "RUNNING":
+            if self._state["status"] not in ("RUNNING", "RECOVERING"):
                 return
             target = self._state.get("active_target_c")
             interval = max(30, int(self._settings.get(["heater_keepalive_seconds"])))
             due = time.monotonic() - self._last_keepalive_monotonic >= interval
         if target is not None and due and self._printer.is_operational():
-            self._printer.commands(
-                [f"M104 S{_fmt(float(target))}"],
-                tags={"source:plugin", f"plugin:{PLUGIN_ID}", "makeit-fa:keepalive"},
-            )
+            self._printer.commands([f"M104 S{_fmt(float(target))}"], tags={"source:plugin", f"plugin:{PLUGIN_ID}", "makeit-fa:keepalive"})
             with self._lock:
                 self._last_keepalive_monotonic = time.monotonic()
 
     def _process_telemetry(self, line: str) -> None:
         prefix, fields = _parse_fields(line)
         message: Dict[str, Any] = {"type": prefix, "fields": fields, "raw": line}
+        row_action: Optional[Tuple[str, Dict[str, str]]] = None
+        recovery_action: Optional[Tuple[str, Dict[str, str]]] = None
+
         with self._lock:
             raw_lines: List[str] = self._state["raw"]
             raw_lines.append(line)
-            if len(raw_lines) > 5000:
-                del raw_lines[:1000]
+            if len(raw_lines) > 10000:
+                del raw_lines[:2000]
 
             target = _float_field(fields, "target")
             if target is None:
@@ -414,56 +443,106 @@ class MakeItFilamentAnalyzerPlugin(
             if target is not None and target > 0:
                 self._state["active_target_c"] = target
 
-            if prefix == "FA2" and "result" in fields:
+            if prefix == "FA2" and "result" in fields and self._state["phase"] == "RUN_ROW":
                 point = self._point_from_fa2(fields, line)
                 self._state["points"].append(point)
                 message["point"] = point
-            elif prefix == "FA8ROW":
-                row = dict(fields)
-                row["raw"] = line
-                self._state["rows"].append(row)
-                message["row"] = row
-            elif prefix == "FA8":
+            elif prefix == "FA7":
+                campaign_id = _int_field(fields, "campaign_id")
                 tag = fields.get("tag", "")
+                if campaign_id == self._state.get("current_campaign_id") and tag in ROW_TERMINAL_TAGS:
+                    row = dict(fields)
+                    row["temperature_c"] = self._state["temperatures"][self._state["temperature_index"]]
+                    row["raw"] = line
+                    self._state["rows"].append(row)
+                    message["row"] = row
+                    row_action = (tag, dict(fields))
+            elif prefix == "FA9":
+                recovery_id = _int_field(fields, "recovery_id")
                 state = fields.get("state", "")
-                if tag in TERMINAL_FA8_TAGS or state in {"COMPLETE", "LIMIT_FOUND", "RECOVERY_FAILED", "INVALID_TEMP", "ABORTED", "ERROR"}:
-                    self._state["terminal"] = {"tag": tag, "state": state, "fields": fields}
-                    self._state["status"] = "COMPLETE" if state == "COMPLETE" else state or "TERMINAL"
-                    self._state["finished_at"] = time.time()
-                    self._state["active_target_c"] = None
-                    self._state["saved_path"] = self._save_run_locked()
-                    message["terminal"] = self._state["terminal"]
-            elif prefix == "FA7" and fields.get("tag") == "heater_disabled":
-                self._state["error"] = "heater target was disabled during the run"
+                if recovery_id == self._state.get("current_recovery_id") and state in RECOVERY_TERMINAL_STATES:
+                    recovery_action = (state, dict(fields))
 
         self._plugin_manager.send_plugin_message(PLUGIN_ID, message)
+        if row_action is not None:
+            self._handle_row_terminal(*row_action)
+        if recovery_action is not None:
+            self._handle_recovery_terminal(*recovery_action)
+
+    def _handle_row_terminal(self, tag: str, fields: Dict[str, str]) -> None:
+        with self._lock:
+            if self._state["status"] == "CANCELLING":
+                self._finish_run_locked("ABORTED", {"source": "FA7", "tag": tag, "fields": fields})
+                send_off = True
+                action = None
+            elif tag in ("invalid_temp", "heater_disabled", "aborted", "point_error", "transaction_state_error"):
+                status = "INVALID_TEMP" if tag == "invalid_temp" else "ABORTED" if tag == "aborted" else "ERROR"
+                self._finish_run_locked(status, {"source": "FA7", "tag": tag, "fields": fields})
+                send_off = True
+                action = None
+            else:
+                index = int(self._state["temperature_index"])
+                next_index = index + 1
+                if next_index >= len(self._state["temperatures"]):
+                    self._finish_run_locked("COMPLETE", {"source": "FA7", "tag": tag, "fields": fields})
+                    send_off = True
+                    action = None
+                else:
+                    send_off = False
+                    action = ("recover" if tag == "limit_found" else "row", next_index)
+        if send_off:
+            self._printer.commands(["M104 S0"], tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
+            self._publish()
+        elif action and action[0] == "recover":
+            self._start_recovery(action[1])
+        elif action:
+            self._start_row(action[1])
+
+    def _handle_recovery_terminal(self, state: str, fields: Dict[str, str]) -> None:
+        with self._lock:
+            if self._state["status"] == "CANCELLING":
+                self._finish_run_locked("ABORTED", {"source": "FA9", "state": state, "fields": fields})
+                next_index = None
+            elif state == "COMPLETE":
+                next_index = int(self._state["temperature_index"]) + 1
+            else:
+                self._finish_run_locked("RECOVERY_FAILED", {"source": "FA9", "state": state, "fields": fields})
+                next_index = None
+        if next_index is None:
+            self._printer.commands(["M104 S0"], tags={"source:plugin", f"plugin:{PLUGIN_ID}"})
+            self._publish()
+        else:
+            self._start_row(next_index)
+
+    def _finish_run_locked(self, status: str, terminal: Dict[str, Any]) -> None:
+        self._state.update(
+            status=status, phase="TERMINAL", terminal=terminal,
+            finished_at=time.time(), active_target_c=None,
+            current_campaign_id=None, current_recovery_id=None,
+        )
+        self._state["saved_path"] = self._save_run_locked()
 
     def _point_from_fa2(self, fields: Dict[str, str], raw_line: str) -> Dict[str, Any]:
         feed = _float_field(fields, "feed_mm_min") or 0.0
         efficiency = _float_field(fields, "efficiency_pct") or 0.0
         temperature = _float_field(fields, "temp_target") or 0.0
-        definition = self._state.get("definition") or {}
-        filament_diameter = float(definition.get("filament_diameter_mm", 1.75))
-        commanded_flow = _flow_mm3_s(feed, filament_diameter)
-        accuracy = float(definition.get("accuracy_threshold_pct", 97.0))
-        throughput = float(definition.get("throughput_threshold_pct", 85.0))
+        d = self._state.get("definition") or {}
+        commanded_flow = _flow_mm3_s(feed, float(d.get("filament_diameter_mm", 1.75)))
+        accuracy = float(d.get("accuracy_threshold_pct", 97.0))
+        throughput = float(d.get("throughput_threshold_pct", 85.0))
         result = fields.get("result", "UNKNOWN")
         tested_mm = _float_field(fields, "tested_mm") or 0.0
         requested_mm = _float_field(fields, "requested_mm") or 0.0
-
         if result == "INVALID_TEMP":
             classification = "INVALID_TEMP"
         elif result == "ABORTED":
             classification = "ABORTED"
-        elif tested_mm + 0.001 < requested_mm:
+        elif tested_mm + 0.001 < requested_mm or efficiency < throughput:
             classification = "HARD_THROUGHPUT_FAIL"
         elif efficiency >= accuracy:
             classification = "ACCURATE"
-        elif efficiency >= throughput:
-            classification = "BELOW_ACCURACY_ABOVE_THROUGHPUT"
         else:
-            classification = "HARD_THROUGHPUT_FAIL"
-
+            classification = "BELOW_ACCURACY_ABOVE_THROUGHPUT"
         return {
             "temperature_c": temperature,
             "feed_mm_min": feed,
@@ -514,8 +593,5 @@ __plugin_pythoncompat__ = ">=3.9,<4"
 def __plugin_load__() -> None:
     global __plugin_implementation__
     __plugin_implementation__ = MakeItFilamentAnalyzerPlugin()
-
     global __plugin_hooks__
-    __plugin_hooks__ = {
-        "octoprint.comm.protocol.gcode.received": __plugin_implementation__.received_gcode,
-    }
+    __plugin_hooks__ = {"octoprint.comm.protocol.gcode.received": __plugin_implementation__.received_gcode}
