@@ -7,7 +7,7 @@ It is material-agnostic. PLA, TPU, PET, PETG, ABS, ASA, nylon, nylon-CF/GF,
 PC, PEEK, and custom materials all use the same measurement engine. Material
 presets are only convenience starting points; every test window remains editable.
 
-## Version 0.2.2
+## Version 0.2.3
 
 The usable bench-controller release includes:
 
@@ -30,7 +30,7 @@ The usable bench-controller release includes:
 - saved-run browser with open, CSV download, JSON download, and delete;
 - interruption checkpointing on OctoPrint disconnect/error events;
 - pure-Python unit tests for grid expansion, telemetry parsing, flow conversion,
-  point classification, and UI resource discovery.
+  point classification, UI resource discovery, and row-continuation policy.
 
 Version 0.2.1 converts an `FA7 tag=conditioning_limit` terminal record into a
 synthetic hard-failure point. The heatmap, JSON, and CSV therefore show the
@@ -51,6 +51,21 @@ Version 0.2.2 hardens OctoPrint UI loading:
 - the template no longer duplicates OctoPrint's generated tab wrapper ID;
 - startup logging prints the resolved template and asset folders;
 - the template contains `data-makeit-fa-ui-version="0.2.2"` for browser checks.
+
+Version 0.2.3 treats `INVALID_TEMP` as a measured row boundary rather than a
+mandatory end to the entire material map. By default, the controller checkpoints
+the purple invalid-temperature cell, runs `M880` when recovery is enabled, and
+continues at the next selected temperature. A final invalid-temperature row ends
+as `COMPLETE_WITH_INVALID_TEMP`. The backend settings are:
+
+```text
+continue_after_invalid_temp = true
+recover_after_invalid_temp = true
+```
+
+Set `continue_after_invalid_temp` to false to restore strict stop-on-invalid
+behavior. This policy applies only to the user-selected point tolerance `D`.
+Marlin thermal-protection faults remain terminal.
 
 The row-by-row runner avoids the firmware `M870` limit of 24 temperature rows.
 The plugin defaults allow up to 100 temperature values, 100 speed values, and
@@ -106,7 +121,7 @@ sudo journalctl -u octoprint --since "2 minutes ago" --no-pager | \
 Expected startup text includes:
 
 ```text
-MAKEiT Filament Analyzer controller 0.2.2 started
+MAKEiT Filament Analyzer controller 0.2.3 started
 ```
 
 Check that OctoPrint serves the static JavaScript:
@@ -161,7 +176,7 @@ M881 conditioning configuration
   -> M109 selected row temperature
   -> M872 selected speed grid
   -> save JSON and CSV checkpoint
-  -> optional M880 recovery after a hard limit
+  -> optional M880 recovery after a hard or invalid-temperature row limit
   -> next selected temperature
 ```
 
@@ -232,5 +247,7 @@ Before unattended use:
 3. Run a two-temperature, two-speed smoke test.
 4. Confirm heatmap cells and both saved files.
 5. Force a hard row limit and confirm `M880` recovery.
-6. Test Stop during `WAIT_TEMP`, `CONDITIONING`, `RUNNING_POINT`, and `RECOVERING`.
-7. Disconnect OctoPrint during a short run and confirm an `INTERRUPTED` checkpoint.
+6. Force an `INVALID_TEMP` row before the final temperature and confirm recovery
+   plus continuation.
+7. Test Stop during `WAIT_TEMP`, `CONDITIONING`, `RUNNING_POINT`, and `RECOVERING`.
+8. Disconnect OctoPrint during a short run and confirm an `INTERRUPTED` checkpoint.
