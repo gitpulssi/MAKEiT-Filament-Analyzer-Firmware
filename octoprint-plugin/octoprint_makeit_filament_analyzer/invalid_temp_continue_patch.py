@@ -94,13 +94,15 @@ class MakeItFilamentAnalyzerPluginV023(MakeItFilamentAnalyzerPluginV022):
             return
 
         with self._lock:
+            index = int(self._state.get("temperature_index") or 0)
+            temperatures = list(self._state.get("temperatures") or [])
+            temperature_c = temperatures[index] if 0 <= index < len(temperatures) else None
+
             self._state["had_invalid_temperature"] = True
             invalid_rows = self._state.setdefault("invalid_temperature_rows", [])
             row_record = {
-                "temperature_index": int(self._state.get("temperature_index") or 0),
-                "temperature_c": (
-                    self._state.get("temperatures") or [None]
-                )[int(self._state.get("temperature_index") or 0)],
+                "temperature_index": index,
+                "temperature_c": temperature_c,
                 "campaign_id": self._state.get("current_campaign_id"),
                 "fields": dict(fields),
             }
@@ -125,13 +127,12 @@ class MakeItFilamentAnalyzerPluginV023(MakeItFilamentAnalyzerPluginV022):
                 action = "stop"
                 action_index: Optional[int] = None
             else:
-                index = int(self._state["temperature_index"])
                 next_index = index + 1
                 definition = self._state.get("definition") or {}
                 recovery_enabled = float(definition.get("recovery_temp_c", 0.0)) > 0.0
                 action, action_index = _invalid_temp_action(
                     next_index=next_index,
-                    temperature_count=len(self._state.get("temperatures") or []),
+                    temperature_count=len(temperatures),
                     continue_enabled=_setting_bool(
                         self._settings.get(["continue_after_invalid_temp"]),
                         True,
@@ -163,6 +164,13 @@ class MakeItFilamentAnalyzerPluginV023(MakeItFilamentAnalyzerPluginV022):
                             "fields": fields,
                         },
                     )
+
+            self._logger.warning(
+                "Analyzer row ended INVALID_TEMP at temperature=%s campaign_id=%s; action=%s",
+                temperature_c,
+                row_record["campaign_id"],
+                action,
+            )
 
         if action in {"stop", "complete"}:
             self._printer.commands(
