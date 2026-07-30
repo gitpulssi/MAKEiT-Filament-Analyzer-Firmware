@@ -5,88 +5,59 @@ MAKEiT filament analyzer Marlin firmware.
 
 It is material-agnostic. PLA, TPU, PET, PETG, ABS, ASA, nylon, nylon-CF/GF,
 PC, PEEK, and custom materials all use the same measurement engine. Material
-presets are only convenience starting points; every test window remains editable.
+presets are convenience starting points only. Every test window remains editable.
 
-## Version 0.2.3
+## Version 0.2.4
 
-The usable bench-controller release includes:
+The bench controller includes:
 
 - editable material, spool, printer, extruder, filament, and nozzle metadata;
 - adjustable temperature start, end, and step;
 - adjustable filament-feed start, end, and step;
 - adjustable conditioning and measured lengths;
-- independent printing-accuracy (`P`) and hard-throughput (`R`) thresholds;
+- independent printing-accuracy `P` and hard-throughput `R` thresholds;
 - adjustable recovery temperature, purge, and validation settings;
 - preflight grid expansion and validation;
 - point-count, maximum filament-use, minimum-duration, and command-length estimates;
 - one-temperature-row-at-a-time `M872` orchestration;
-- automatic `M880` recovery after a hard row limit;
+- automatic `M880` recovery after a hard or invalid-temperature row boundary;
 - same-target heater keepalive during a supervised run;
-- non-blocking `FA*` telemetry queuing from OctoPrint's serial receive hook;
-- live measured-point table;
-- live temperature x speed heatmap;
+- non-blocking `FA*` telemetry processing;
+- live point table and temperature x speed heatmap;
 - accurate-flow and hard-throughput boundary graph versus temperature;
-- JSON and tidy CSV checkpoints after every completed row;
-- saved-run browser with open, CSV download, JSON download, and delete;
-- interruption checkpointing on OctoPrint disconnect/error events;
-- pure-Python unit tests for grid expansion, telemetry parsing, flow conversion,
-  point classification, UI resource discovery, and row-continuation policy.
+- recommended printing-speed heatmap;
+- JSON and tidy CSV checkpoints;
+- saved-run browser;
+- interrupted-run checkpointing.
 
-Version 0.2.1 converts an `FA7 tag=conditioning_limit` terminal record into a
-synthetic hard-failure point. The heatmap, JSON, and CSV therefore show the
-failed temperature/speed cell even when firmware correctly stops during the
-conditioning feed before an `FA2` measured point exists. The record includes:
+### Version history
 
-```text
-result=CONDITIONING_LIMIT
-classification=HARD_THROUGHPUT_FAIL
-failure_stage=CONDITIONING
-measurement_started=false
-```
+0.2.1 converts `FA7 tag=conditioning_limit` into a synthetic hard-failure point
+so the failed temperature/speed cell appears even when measurement never starts.
 
-Version 0.2.2 hardens OctoPrint UI loading:
+0.2.2 resolves template and asset folders from the installed package, names the
+tab template directly, and removes a duplicate tab wrapper ID.
 
-- the template and asset folders are resolved from the installed package path;
-- the tab template filename is supplied directly to OctoPrint;
-- the template no longer duplicates OctoPrint's generated tab wrapper ID;
-- startup logging prints the resolved template and asset folders;
-- the template contains `data-makeit-fa-ui-version="0.2.2"` for browser checks.
+0.2.3 treats the user-selected `D`-band `INVALID_TEMP` result as a measured graph
+boundary. The controller can recover and continue at the next temperature.
 
-Version 0.2.3 treats `INVALID_TEMP` as a measured row boundary rather than a
-mandatory end to the entire material map. By default, the controller checkpoints
-the purple invalid-temperature cell, runs `M880` when recovery is enabled, and
-continues at the next selected temperature. A final invalid-temperature row ends
-as `COMPLETE_WITH_INVALID_TEMP`. The backend settings are:
+0.2.4 adds a recommended printing-speed heatmap based on measured delivered flow,
+user-entered line width, layer height, and slicer safety factor.
 
-```text
-continue_after_invalid_temp = true
-recover_after_invalid_temp = true
-```
+## Install or upgrade on this OctoPi system
 
-Set `continue_after_invalid_temp` to false to restore strict stop-on-invalid
-behavior. This policy applies only to the user-selected point tolerance `D`.
-Marlin thermal-protection faults remain terminal.
-
-The row-by-row runner avoids the firmware `M870` limit of 24 temperature rows.
-The plugin defaults allow up to 100 temperature values, 100 speed values, and
-2,000 total measured points. These are configurable safety ceilings, not
-material constants.
-
-## Install for development
-
-Use the Python environment that runs the OctoPrint service. On this project's
-OctoPi installation, systemd runs:
+The OctoPrint service uses:
 
 ```text
 /opt/octopi/oprint/bin/octoprint
 ```
 
-Install with:
+Install into that same Python environment:
 
 ```bash
 cd ~/MAKEiT-Filament-Analyzer-Firmware
 git pull --ff-only
-/opt/octopi/oprint/bin/python -m pip install -e ./octoprint-plugin
+/opt/octopi/oprint/bin/python -m pip install --force-reinstall -e ./octoprint-plugin
 sudo systemctl restart octoprint
 ```
 
@@ -96,56 +67,13 @@ Confirm the installed package:
 /opt/octopi/oprint/bin/python -m pip show OctoPrint-MAKEiT-Filament-Analyzer
 ```
 
-The plugin appears as the **Filament Analyzer** tab.
+Expected version:
 
-## Upgrade an editable installation
-
-```bash
-cd ~/MAKEiT-Filament-Analyzer-Firmware
-git pull --ff-only
-/opt/octopi/oprint/bin/python -m pip install -e ./octoprint-plugin
-sudo systemctl restart octoprint
+```text
+0.2.4
 ```
 
 A browser hard refresh may be needed after JavaScript or CSS changes.
-
-## Blank-tab diagnostics
-
-Check startup and resolved resource paths:
-
-```bash
-sudo journalctl -u octoprint --since "2 minutes ago" --no-pager | \
-  grep -iE "makeit|filament analyzer|traceback|failed to load|error"
-```
-
-Expected startup text includes:
-
-```text
-MAKEiT Filament Analyzer controller 0.2.3 started
-```
-
-Check that OctoPrint serves the static JavaScript:
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" \
-  http://127.0.0.1:5000/plugin/makeit_filament_analyzer/static/js/makeit_filament_analyzer.js
-```
-
-Expected HTTP status:
-
-```text
-200
-```
-
-Check whether the rendered OctoPrint page contains the tab and UI marker:
-
-```bash
-curl -s http://127.0.0.1:5000/ | \
-  grep -E "tab_plugin_makeit_filament_analyzer|makeit-fa-ui-version"
-```
-
-A logged-in browser may still be required to inspect the final rendered page if
-OctoPrint redirects unauthenticated requests to its login view.
 
 ## Test definition
 
@@ -162,21 +90,59 @@ Hard throughput R: 85%
 Recovery: 245 C, 50 mm prime at F100, 100 mm validation at F100
 ```
 
-The plugin converts filament feed to volumetric flow using the entered filament
-diameter. Nozzle diameter and nozzle material are stored because they affect
-backpressure and measured capability, but they are not part of the filament
-volume conversion.
+The plugin converts filament feed to volumetric flow using filament diameter.
+Nozzle diameter and nozzle material are stored because they affect the physical
+result, but nozzle diameter is not part of the filament-volume conversion.
+
+## Recommended printing-speed heatmap
+
+Printing speed cannot be calculated from nozzle diameter alone. It also depends
+on the intended line width and layer height.
+
+The graph uses:
+
+```text
+recommended print speed, mm/s
+  = delivered flow, mm3/s
+  x safety factor / 100
+  / (line width, mm x layer height, mm)
+```
+
+The `Use nozzle defaults` button sets:
+
+```text
+line width = nozzle diameter
+layer height = nozzle diameter / 2
+```
+
+The default safety factor is 90 percent. Set it to 100 percent to display the
+direct measured-flow equivalent.
+
+Graph colors retain the measurement classification:
+
+```text
+Green  = met P
+Amber  = below P but above R
+Red    = hard throughput failure
+Purple = invalid temperature
+Gray   = untested
+```
+
+For a 0.6 mm line width, 0.3 mm layer height, 90 percent safety factor, and
+20 mm3/s delivered flow:
+
+```text
+20 x 0.90 / (0.6 x 0.3) = 100 mm/s
+```
 
 ## Execution model
 
-The plugin owns the outer temperature loop:
-
 ```text
 M881 conditioning configuration
-  -> M109 selected row temperature
+  -> M109 selected temperature
   -> M872 selected speed grid
   -> save JSON and CSV checkpoint
-  -> optional M880 recovery after a hard or invalid-temperature row limit
+  -> optional M880 recovery
   -> next selected temperature
 ```
 
@@ -184,34 +150,9 @@ Marlin remains responsible for bounded segmented extrusion, encoder counting,
 temperature validity, rolling and pulse-gap monitoring, exactly-once point
 execution, and graceful abort.
 
-## Graphs
-
-The primary graph is a measured-cell heatmap:
-
-```text
-X = temperature
-Y = filament feed speed
-Color = selected metric
-```
-
-Metrics include:
-
-- efficiency percent;
-- delivered volumetric flow;
-- commanded volumetric flow;
-- minimum measured temperature;
-- temperature droop.
-
-The secondary boundary graph plots:
-
-- highest feed/flow that remained at or above `P`;
-- highest feed/flow accepted before the hard `R` boundary.
-
-No interpolation is applied to the raw measured cells.
-
 ## Data files
 
-Runs are checkpointed under OctoPrint's plugin data directory, usually:
+Runs are checkpointed under:
 
 ```text
 ~/.octoprint/data/makeit_filament_analyzer/
@@ -224,30 +165,23 @@ run-<id>.json
 run-<id>.csv
 ```
 
-The JSON preserves the immutable test definition, firmware information,
-telemetry-derived points, completed row summaries, recovery summaries, raw
-telemetry, and terminal state. The CSV contains one row per measured or
-conditioning-limit temperature/speed point.
+The JSON preserves the test definition, firmware information, points, row
+summaries, recovery summaries, telemetry, and terminal state. The CSV contains
+one row per measured or conditioning-limit temperature/speed point.
 
 ## Unit tests
-
-The tests do not require a running OctoPrint server:
 
 ```bash
 cd octoprint-plugin
 python -m unittest discover -s tests -v
 ```
 
-## Production-validation checklist
+## Current production checklist
 
-Before unattended use:
-
-1. Install the plugin and confirm the tab and saved-run list load.
-2. Validate a 2 x 2 grid without starting.
-3. Run a two-temperature, two-speed smoke test.
-4. Confirm heatmap cells and both saved files.
-5. Force a hard row limit and confirm `M880` recovery.
-6. Force an `INVALID_TEMP` row before the final temperature and confirm recovery
-   plus continuation.
-7. Test Stop during `WAIT_TEMP`, `CONDITIONING`, `RUNNING_POINT`, and `RECOVERING`.
-8. Disconnect OctoPrint during a short run and confirm an `INTERRUPTED` checkpoint.
+1. Install 0.2.4 and confirm both heatmaps render.
+2. Load a saved run and confirm nozzle-based print geometry is populated.
+3. Change line width, layer height, and safety factor and confirm cell speeds update.
+4. Validate a 2 x 2 grid.
+5. Test Stop during thermal waiting, conditioning, measurement, and recovery.
+6. Test disconnect interruption checkpointing.
+7. Validate cooling-gated automatic PSU power-off before unattended overnight use.
