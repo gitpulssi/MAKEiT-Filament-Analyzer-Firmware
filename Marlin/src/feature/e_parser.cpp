@@ -33,6 +33,9 @@
 // Static data members
 bool EmergencyParser::killed_by_M112, // = false
      EmergencyParser::quickstop_by_M410,
+     #if ENABLED(MAKEIT_FILAMENT_ANALYZER_PHASE0)
+       EmergencyParser::abort_by_M879,
+     #endif
      #if ENABLED(SDSUPPORT)
        EmergencyParser::sd_abort_by_M524,
      #endif
@@ -42,7 +45,6 @@ bool EmergencyParser::killed_by_M112, // = false
   uint8_t EmergencyParser::M876_reason; // = 0
 #endif
 
-// Global instance
 EmergencyParser emergency_parser;
 
 #endif // EMERGENCY_PARSER

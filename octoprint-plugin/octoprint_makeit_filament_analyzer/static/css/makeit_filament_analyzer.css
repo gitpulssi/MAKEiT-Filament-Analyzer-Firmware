@@ -1,0 +1,233 @@
+.makeit-fa {
+  padding: 12px 4px 28px;
+}
+
+.makeit-fa-header,
+.makeit-fa-actions,
+.makeit-fa-chart-header,
+.makeit-fa-preview-values,
+.makeit-fa-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.makeit-fa-header {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.makeit-fa-header h3,
+.makeit-fa-card h4 {
+  margin-top: 0;
+}
+
+.makeit-fa-header p,
+.makeit-fa-phase {
+  color: #666;
+  margin: 3px 0 0;
+}
+
+.makeit-fa-phase {
+  font-size: 11px;
+  text-align: center;
+}
+
+.makeit-fa-status {
+  border-radius: 999px;
+  font-weight: 700;
+  padding: 7px 13px;
+  background: #e4e4e4;
+  text-align: center;
+}
+
+.makeit-fa-status.status-running,
+.makeit-fa-status.status-starting,
+.makeit-fa-status.status-recovering {
+  background: #d9edf7;
+  color: #245269;
+}
+
+.makeit-fa-status.status-complete {
+  background: #dff0d8;
+  color: #3c763d;
+}
+
+.makeit-fa-status.status-cancelling,
+.makeit-fa-status.status-aborted,
+.makeit-fa-status.status-error,
+.makeit-fa-status.status-invalid_temp,
+.makeit-fa-status.status-recovery_failed,
+.makeit-fa-status.status-interrupted,
+.makeit-fa-status.status-heater_disabled {
+  background: #f2dede;
+  color: #a94442;
+}
+
+.makeit-fa-grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.makeit-fa-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.makeit-fa-grid-two {
+  grid-template-columns: minmax(0, 1.2fr) minmax(390px, 1fr);
+}
+
+.makeit-fa-card {
+  background: #fff;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  box-sizing: border-box;
+  margin-bottom: 12px;
+  padding: 14px;
+}
+
+.makeit-fa-card label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 9px;
+}
+
+.makeit-fa-card input,
+.makeit-fa-card select,
+.makeit-fa-card textarea {
+  box-sizing: border-box;
+  margin-top: 3px;
+  width: 100%;
+}
+
+.makeit-fa-row {
+  display: flex;
+  gap: 9px;
+}
+
+.makeit-fa-row > label {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.makeit-fa-card details {
+  border-top: 1px solid #eee;
+  margin-top: 10px;
+  padding-top: 8px;
+}
+
+.makeit-fa-card summary {
+  cursor: pointer;
+  font-weight: 700;
+  margin-bottom: 9px;
+}
+
+.makeit-fa-actions {
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.makeit-fa-preview-values {
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.makeit-fa-preview-values span {
+  background: #f2f2f2;
+  border-radius: 4px;
+  padding: 6px 9px;
+}
+
+.makeit-fa-progress {
+  margin: 6px 0 10px;
+}
+
+.makeit-fa-error {
+  background: #f2dede;
+  border: 1px solid #ebccd1;
+  border-radius: 4px;
+  color: #a94442;
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  white-space: pre-wrap;
+}
+
+.makeit-fa-gcode {
+  max-height: 150px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.makeit-fa-chart-header {
+  justify-content: space-between;
+}
+
+.makeit-fa-chart-header select {
+  width: auto;
+}
+
+#makeit-fa-heatmap,
+#makeit-fa-boundary {
+  border: 1px solid #ddd;
+  display: block;
+  max-width: 100%;
+}
+
+.makeit-fa-legend {
+  color: #666;
+  flex-wrap: wrap;
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+.makeit-fa-table-wrap {
+  max-height: 590px;
+  overflow: auto;
+}
+
+.makeit-fa-run-actions {
+  white-space: nowrap;
+}
+
+.makeit-fa-run-actions .btn {
+  margin: 1px;
+}
+
+.makeit-fa td.ACCURATE {
+  color: #2d7d32;
+  font-weight: 700;
+}
+
+.makeit-fa td.BELOW_ACCURACY_ABOVE_THROUGHPUT {
+  color: #a66b00;
+  font-weight: 700;
+}
+
+.makeit-fa td.HARD_THROUGHPUT_FAIL,
+.makeit-fa td.INVALID_TEMP,
+.makeit-fa td.ABORTED {
+  color: #b52b27;
+  font-weight: 700;
+}
+
+@media (max-width: 1180px) {
+  .makeit-fa-grid-three,
+  .makeit-fa-grid-two {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .makeit-fa-row,
+  .makeit-fa-header,
+  .makeit-fa-chart-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .makeit-fa-run-actions {
+    white-space: normal;
+  }
+}
