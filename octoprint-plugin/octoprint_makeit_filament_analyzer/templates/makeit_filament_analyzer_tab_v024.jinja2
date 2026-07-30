@@ -1,0 +1,43 @@
+{% include "makeit_filament_analyzer_tab.jinja2" %}
+
+<div class="makeit-fa makeit-fa-print-speed-extension" data-makeit-fa-ui-version="0.2.4">
+  <section class="makeit-fa-card">
+    <div class="makeit-fa-chart-header">
+      <div>
+        <h4>Recommended printing speed map</h4>
+        <p class="help-block">
+          Cell values are linear print speed in mm/s, calculated from measured delivered flow.
+          Green cells met P, amber cells stayed above R, red cells are hard failures.
+        </p>
+      </div>
+      <button class="btn" data-bind="click: useNozzlePrintGeometry">
+        Use nozzle defaults
+      </button>
+    </div>
+
+    <div class="makeit-fa-print-geometry">
+      <label>
+        Line width, mm
+        <input type="number" min="0.05" max="5" step="0.01" data-bind="value: printLineWidth">
+      </label>
+      <label>
+        Layer height, mm
+        <input type="number" min="0.01" max="3" step="0.01" data-bind="value: printLayerHeight">
+      </label>
+      <label>
+        Slicer safety factor, %
+        <input type="number" min="1" max="100" step="1" data-bind="value: printSpeedSafety">
+      </label>
+      <div class="makeit-fa-print-formula" data-bind="text: printGeometryText"></div>
+    </div>
+
+    <canvas id="makeit-fa-print-speed-map" width="1000" height="560"></canvas>
+    <div class="makeit-fa-legend">
+      <span>Gray: untested</span>
+      <span>Green: accurate printing region</span>
+      <span>Amber: below P, above R</span>
+      <span>Red: hard failure</span>
+      <span>Purple: invalid temperature</span>
+    </div>
+  </section>
+</div>
